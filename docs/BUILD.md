@@ -62,3 +62,27 @@ Mantener pulsado **BOOTSEL**, conectar el USB, y arrastrar el `.uf2` a la unidad
 - `SAVIA_ON_DEVICE_INFERENCE=ON` en una Pico WH **compilaría pero no cabría** en
   RAM; por eso la combinación recomendada para el RP2040 es `OFF`.
 - TFLM (`lib/pico-tflmicro`) solo se enlaza con `SAVIA_ON_DEVICE_INFERENCE=ON`.
+
+## Tests de host (sin SDK, sin placa)
+
+La lógica pura (config, y a futuro codecs/parsers/agregación) se compila y testea
+**nativamente en el PC**, sin el Pico SDK ni hardware:
+
+```sh
+sh test/run_host_tests.sh
+```
+
+Usa el `cc` del sistema con `-Iinclude`. Es el equivalente a la suite `pytest` de
+`savia_py` para la parte de lógica que no depende del hardware.
+
+## Preparar el cross-compile (una vez)
+
+Compilar el `.uf2` del firmware necesita el toolchain ARM + el Pico SDK (no la placa):
+
+```sh
+sh tools/setup_pico_sdk.sh        # arm-none-eabi-gcc + ninja + clona pico-sdk
+export PICO_SDK_PATH=$HOME/pico-sdk
+```
+
+Después, los comandos de compilación de arriba. **Compilar no requiere el Pico**;
+la placa solo hace falta para flashear y ejecutar.
