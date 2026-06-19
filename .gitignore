@@ -1,0 +1,21 @@
+# Build
+build/
+cmake-build-*/
+*.uf2
+*.elf
+*.bin
+*.hex
+*.dis
+*.map
+CMakeCache.txt
+CMakeFiles/
+
+# External SDKs / vendored libs (added as submodules or via PICO_SDK_PATH)
+lib/pico-tflmicro/
+pico-sdk/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
