@@ -1,0 +1,90 @@
+#include "savia/ble_codec.h"
+#include "savia/cbor.h"
+#include "savia/protocol.h"
+#include <string.h>
+
+static const char *kind_str(uint8_t kind) {
+    switch (kind) {
+        case READING_SOIL_MOISTURE:    return "soil_moisture";
+        case READING_SOIL_TEMPERATURE: return "soil_temperature";
+        default:                       return "unknown";
+    }
+}
+
+size_t ble_serialize_readings(const savia_reading_t *rows, size_t n,
+                              uint8_t *out, size_t cap) {
+    cbor_writer_t w;
+    cbor_w_init(&w, out, cap);
+    cbor_w_array(&w, n);
+    for (size_t i = 0; i < n; i++) {
+        cbor_w_map(&w, 5);
+        cbor_w_textz(&w, "ts_ms");    cbor_w_uint(&w, rows[i].ts_ms);
+        cbor_w_textz(&w, "port");     cbor_w_uint(&w, rows[i].port);
+        cbor_w_textz(&w, "kind");     cbor_w_textz(&w, kind_str(rows[i].kind));
+        cbor_w_textz(&w, "value");    cbor_w_double(&w, (double) rows[i].value);
+        cbor_w_textz(&w, "depth_cm"); cbor_w_uint(&w, rows[i].depth_cm);
+    }
+    return w.overflow ? 0 : w.len;
+}
+
+void ble_chunk_encode(const uint8_t *payload, size_t len, size_t chunk_size,
+                      ble_frame_emit_fn emit, void *ctx) {
+    if (chunk_size == 0) chunk_size = BLE_DATA_CHUNK_BYTES;
+    size_t total = (len + chunk_size - 1) / chunk_size;
+    if (total == 0) total = 1;   // empty payload -> single eof frame
+
+    uint8_t frame[BLE_DATA_CHUNK_BYTES + 64];
+    for (size_t seq = 0; seq < total; seq++) {
+        size_t start = seq * chunk_size;
+        size_t end = start + chunk_size;
+        if (end > len) end = len;
+        size_t clen = (start < len) ? (end - start) : 0;
+
+        cbor_writer_t w;
+        cbor_w_init(&w, frame, sizeof(frame));
+        cbor_w_map(&w, 6);
+        cbor_w_textz(&w, "v");   cbor_w_uint(&w, SAVIA_PROTOCOL_VERSION);
+        cbor_w_textz(&w, "op");  cbor_w_textz(&w, SAVIA_OP_CHUNK);
+        cbor_w_textz(&w, "s");   cbor_w_uint(&w, seq);
+        cbor_w_textz(&w, "t");   cbor_w_uint(&w, total);
+        cbor_w_textz(&w, "eof"); cbor_w_bool(&w, seq == total - 1);
+        cbor_w_textz(&w, "p");   cbor_w_bytes(&w, payload + start, clen);
+        if (!w.overflow) emit(frame, w.len, ctx);
+    }
+}
+
+bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *out) {
+    memset(out, 0, sizeof(*out));
+    cbor_reader_t r;
+    cbor_r_init(&r, buf, len);
+
+    uint64_t count;
+    if (!cbor_r_map(&r, &count)) return false;
+    for (uint64_t i = 0; i < count; i++) {
+        const char *k; size_t kn;
+        if (!cbor_r_text(&r, &k, &kn)) return false;
+
+        if (cbor_text_eq(k, kn, "v")) {
+            uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+            out->version = (int) v;
+        } else if (cbor_text_eq(k, kn, "op")) {
+            const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
+            if (sn >= sizeof(out->op)) sn = sizeof(out->op) - 1;
+            memcpy(out->op, s, sn); out->op[sn] = 0;
+        } else if (cbor_text_eq(k, kn, "kind")) {
+            const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
+            if (sn >= sizeof(out->kind)) sn = sizeof(out->kind) - 1;
+            memcpy(out->kind, s, sn); out->kind[sn] = 0;
+        } else if (cbor_text_eq(k, kn, "from")) {
+            if (!cbor_r_uint(&r, &out->from_ms)) return false; out->has_from = true;
+        } else if (cbor_text_eq(k, kn, "to")) {
+            if (!cbor_r_uint(&r, &out->to_ms)) return false; out->has_to = true;
+        } else if (cbor_text_eq(k, kn, "limit")) {
+            if (!cbor_r_uint(&r, &out->limit)) return false; out->has_limit = true;
+        } else {
+            if (!cbor_r_skip(&r)) return false;
+        }
+    }
+    out->ok = !r.err;
+    return out->ok;
+}
