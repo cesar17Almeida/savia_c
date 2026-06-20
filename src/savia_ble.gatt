@@ -1,0 +1,14 @@
+// Savia BLE GATT database -- same contract as savia_py (see savia/protocol.h),
+// so TerraLink (config) and Tobías' dashboard (client) connect unchanged.
+// Compiled to savia_ble.h by the Pico SDK (pico_btstack_make_gatt_header).
+
+PRIMARY_SERVICE, GAP_SERVICE
+CHARACTERISTIC, GAP_DEVICE_NAME, READ, "Savia"
+
+PRIMARY_SERVICE, GATT_SERVICE
+CHARACTERISTIC, GATT_DATABASE_HASH, READ,
+
+// --- Savia service (5a71a000-...-0001) ---
+PRIMARY_SERVICE, 5A71A000-0000-0000-0000-000000000001
+// status (0010): firmware version, uptime, last sync -- read (dynamic).
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000010, READ | DYNAMIC,

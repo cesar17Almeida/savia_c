@@ -72,10 +72,13 @@ target_link_libraries(savia_c
 # BLE peripheral vía BTstack sobre el CYW43439 (mismo chip en Pico WH y Pico 2 W).
 # Se enlaza solo con SAVIA_ENABLE_BLE=ON (cuando el módulo BLE esté implementado).
 if(SAVIA_ENABLE_BLE)
-  target_compile_definitions(savia_c PRIVATE SAVIA_ENABLE_BLE=1)
+  # CYW43_LWIP=0: BLE-only, sin WiFi/lwIP (evita el include de lwip/netif.h).
+  target_compile_definitions(savia_c PRIVATE SAVIA_ENABLE_BLE=1 CYW43_LWIP=0)
+  # Genera el ATT DB (savia_ble.h) desde el .gatt (mismo contrato que savia_py).
+  pico_btstack_make_gatt_header(savia_c PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src/savia_ble.gatt)
   target_link_libraries(savia_c
-    pico_cyw43_arch_none    # init del CYW43 (BLE; sin lwIP)
-    pico_btstack_ble        # GATT server
+    pico_cyw43_arch_threadsafe_background   # BLE corre en background; el supervisor sigue
+    pico_btstack_ble                        # GATT server
     pico_btstack_cyw43
   )
 endif()
