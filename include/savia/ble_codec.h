@@ -31,6 +31,11 @@ typedef void (*ble_frame_emit_fn)(const uint8_t *frame, size_t len, void *ctx);
 void ble_chunk_encode(const uint8_t *payload, size_t len, size_t chunk_size,
                       ble_frame_emit_fn emit, void *ctx);
 
+// Stateful chunking for BTstack flow control: send one frame per CAN_SEND_NOW.
+size_t ble_chunk_total(size_t payload_len, size_t chunk_size);          // # of frames
+size_t ble_chunk_make_frame(const uint8_t *payload, size_t len, size_t chunk_size,
+                            size_t seq, uint8_t *out, size_t cap);       // build frame `seq`
+
 // Parsed data_request ({v, op:"get"/"count", kind:"raw"/"agg"/"pred", from?, to?, limit?}).
 typedef struct {
     bool     ok;

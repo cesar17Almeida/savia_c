@@ -11,6 +11,7 @@
 #include "savia/power.h"
 #include "savia/sensor.h"
 #include "savia/storage.h"
+#include "savia/clock.h"
 #include "savia/ble.h"
 #include "savia/lora.h"
 #include "savia/inference.h"
@@ -33,11 +34,16 @@ int main(void) {
            inference_on_device(), cfg.sensor_count, cfg.sleep_seconds);
 
     for (;;) {
-        // 1. Acquire: read every configured sensor slot, persist each reading.
+        // 1. Acquire: read every configured sensor slot, timestamp with the wall
+        //    clock (epoch once time_sync arrives; board uptime before that), and
+        //    persist each reading.
+        uint64_t up = to_ms_since_boot(get_absolute_time());
+        uint64_t now_ms = clock_is_set() ? clock_now(up) : up;
         for (uint8_t i = 0; i < cfg.sensor_count; i++) {
             savia_reading_t buf[8];
             int n = sensor_measure(&cfg.sensors[i], buf, 8);
             for (int k = 0; k < n; k++) {
+                buf[k].ts_ms = now_ms;
                 storage_append_reading(&buf[k]);
             }
         }

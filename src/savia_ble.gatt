@@ -10,5 +10,14 @@ CHARACTERISTIC, GATT_DATABASE_HASH, READ,
 
 // --- Savia service (5a71a000-...-0001) ---
 PRIMARY_SERVICE, 5A71A000-0000-0000-0000-000000000001
-// status (0010): firmware version, uptime, last sync -- read (dynamic).
+// status (0010): {v, fw, uptime_s, last_sync_ms, weather_updated_ms} -- read.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000010, READ | DYNAMIC,
+// time_sync (0011): {v, op:"set", ms} -- write.
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000011, WRITE | DYNAMIC,
+// weather (0012): {v, op:"upd", data:{...}} -- write.
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000012, WRITE | DYNAMIC,
+// data_request (0020): {v, op:"get"/"count", kind, from?, to?, limit?} -- write.
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000020, WRITE | DYNAMIC,
+// data_response (0021): {v, op:"chunk", s, t, eof, p} -- notify (chunked).
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000021, NOTIFY | DYNAMIC,
+CLIENT_CHARACTERISTIC_CONFIGURATION,

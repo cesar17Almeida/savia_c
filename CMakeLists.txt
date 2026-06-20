@@ -40,8 +40,11 @@ add_executable(savia_c
   src/main.c
   src/config.c
   src/power.c
+  src/clock.c
   src/sensor_sdi12.c
   src/storage_flash.c
+  src/cbor.c
+  src/ble_codec.c
   src/ble_gatt.c
   src/lora_wioe5.c
   src/inference.c
