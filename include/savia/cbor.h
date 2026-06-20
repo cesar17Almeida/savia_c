@@ -26,6 +26,7 @@ void cbor_w_textz(cbor_writer_t *w, const char *s);   // null-terminated
 void cbor_w_bytes(cbor_writer_t *w, const uint8_t *p, size_t n);
 void cbor_w_double(cbor_writer_t *w, double v);
 void cbor_w_bool(cbor_writer_t *w, bool b);
+void cbor_w_null(cbor_writer_t *w);
 
 // --- Reader (minimal: enough to parse a flat control-message map) -----------
 typedef struct {

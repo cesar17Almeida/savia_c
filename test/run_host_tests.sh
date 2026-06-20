@@ -1,8 +1,7 @@
 #!/usr/bin/env sh
 # Host unit tests: compile the SDK-free firmware logic NATIVELY (no Pico SDK,
-# no hardware) and run assert-based checks. Catches logic/type/format errors on
-# the PC. The BLE codec is cross-checked against savia_py's OWN codec, proving
-# TerraLink-compatible output.
+# no hardware) and run assert-based checks. The BLE codec is cross-checked
+# against savia_py's OWN codec, proving TerraLink-compatible output.
 #
 # Firmware cross-compile (the full .uf2) is a separate path -- see docs/BUILD.md.
 set -e
@@ -15,7 +14,12 @@ echo "== 1) config test =="
 /tmp/savia_test_config
 
 echo ""
-echo "== 2) BLE codec test + cross-check vs savia_py =="
+echo "== 2) storage + clock test =="
+"$CC" $CFLAGS test/test_storage.c src/storage_flash.c src/clock.c -o /tmp/savia_test_storage
+/tmp/savia_test_storage
+
+echo ""
+echo "== 3) BLE codec test + cross-check vs savia_py =="
 PYTHON="../savia_py/.venv/bin/python"
 if [ ! -x "$PYTHON" ]; then
   echo "  !! falta $PYTHON (venv de savia_py con cbor2); salto el cross-check"

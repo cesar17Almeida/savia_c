@@ -1,0 +1,62 @@
+// Host test for the RAM storage ring + hourly aggregation + software clock.
+// Pure logic, no SDK / hardware.
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+#include "savia/storage.h"
+#include "savia/clock.h"
+#include "savia/types.h"
+
+int main(void) {
+    // --- clock ---
+    clock_set(1700000000000ULL, 5000);
+    assert(clock_is_set());
+    assert(clock_now(5000) == 1700000000000ULL);
+    assert(clock_now(6000) == 1700000001000ULL);   // +1 s uptime
+    assert(clock_last_sync_ms() == 1700000000000ULL);
+    printf("test_storage: clock OK\n");
+
+    // --- storage ---
+    storage_init();
+    uint64_t H = 1700000000000ULL;
+    uint64_t hour0 = H - (H % 3600000ULL);
+
+    savia_reading_t r = { .port = 1, .depth_cm = 10, .kind = READING_SOIL_MOISTURE };
+    r.ts_ms = hour0 + 1000; r.value = 0.5f; storage_append_reading(&r);
+    r.ts_ms = hour0 + 2000; r.value = 0.6f; storage_append_reading(&r);
+    r.ts_ms = hour0 + 3000; r.value = 0.7f; storage_append_reading(&r);
+    r.ts_ms = hour0 + 3600000ULL + 500; r.value = 0.8f; storage_append_reading(&r);  // next hour
+
+    savia_reading_t out[16];
+    assert(storage_query_raw(0, UINT64_MAX, 0, out, 16) == 4);
+    assert(storage_count_raw(0, UINT64_MAX) == 4);
+    assert(storage_query_raw(0, hour0 + 3600000ULL, 0, out, 16) == 3);   // range filter
+    assert(storage_query_raw(0, UINT64_MAX, 2, out, 16) == 2);           // limit
+
+    savia_aggregate_t aggs[8];
+    size_t na = storage_aggregate_hourly(0, UINT64_MAX, 0, aggs, 8);
+    assert(na == 2);
+    int b0 = -1;
+    for (size_t i = 0; i < na; i++) if (aggs[i].hour_ms == hour0) b0 = (int) i;
+    assert(b0 >= 0);
+    assert(aggs[b0].count == 3);
+    assert(aggs[b0].min == 0.5f && aggs[b0].max == 0.7f);
+    assert(aggs[b0].mean > 0.59f && aggs[b0].mean < 0.61f);
+    printf("test_storage: ring + aggregation OK\n");
+
+    // --- predictions (empty -> append -> query) ---
+    assert(storage_count_pred(0, UINT64_MAX) == 0);
+    savia_prediction_t p;
+    memset(&p, 0, sizeof(p));
+    p.ts_ms = hour0; p.value = 0.66f;
+    strcpy(p.model, "lstm-hs30");
+    strcpy(p.kind, "hs30_forecast");
+    storage_append_prediction(&p);
+    savia_prediction_t po[4];
+    assert(storage_query_pred(0, UINT64_MAX, 0, po, 4) == 1);
+    printf("test_storage: predictions OK\n");
+
+    printf("test_storage: OK\n");
+    return 0;
+}

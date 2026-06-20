@@ -70,6 +70,8 @@ void cbor_w_double(cbor_writer_t *w, double v) {
 
 void cbor_w_bool(cbor_writer_t *w, bool b) { w_byte(w, b ? 0xf5 : 0xf4); }
 
+void cbor_w_null(cbor_writer_t *w) { w_byte(w, 0xf6); }   // major 7, simple 22
+
 // --- Reader -----------------------------------------------------------------
 
 void cbor_r_init(cbor_reader_t *r, const uint8_t *buf, size_t len) {

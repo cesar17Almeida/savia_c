@@ -5,6 +5,7 @@
 #define SAVIA_PROTOCOL_H
 
 #define SAVIA_PROTOCOL_VERSION 1
+#define SAVIA_FW_VERSION "0.1.0-c"   // savia_c firmware version (status payload)
 
 // Service + characteristic UUIDs (128-bit). Base: 5a71a000-0000-0000-0000-0000000000XX
 #define SAVIA_SVC_UUID            "5a71a000-0000-0000-0000-000000000001"
