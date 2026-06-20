@@ -28,6 +28,11 @@ set(CMAKE_CXX_STANDARD 17)
 # la hace la app móvil con el pronóstico que servimos por BLE.
 option(SAVIA_ON_DEVICE_INFERENCE "Run the LSTM on-device (needs RP2350 RAM/FPU)" OFF)
 
+# El stack BLE (BTstack + CYW43) se enlaza solo cuando el módulo BLE esté
+# implementado. En el scaffold se deja OFF para que el primer build sea mínimo
+# y arranque seguro. Se activa con -DSAVIA_ENABLE_BLE=ON.
+option(SAVIA_ENABLE_BLE "Link the BLE stack (BTstack + CYW43)" OFF)
+
 pico_sdk_init()
 
 # --- Ejecutable -------------------------------------------------------------
@@ -57,16 +62,23 @@ endif()
 set_target_properties(savia_c PROPERTIES OUTPUT_NAME "savia_c-${SAVIA_VARIANT}")
 
 # --- Librerías del Pico SDK -------------------------------------------------
-# BLE peripheral vía BTstack sobre el CYW43439 (mismo chip en Pico WH y Pico 2 W).
 target_link_libraries(savia_c
   pico_stdlib
-  pico_cyw43_arch_none      # init del CYW43 (BLE; sin lwIP)
-  pico_btstack_ble          # GATT server
-  pico_btstack_cyw43
   hardware_flash            # anillo de almacenamiento en flash
   hardware_uart             # LoRa Wio-E5 (comandos AT)
   hardware_pio              # timing de SDI-12
 )
+
+# BLE peripheral vía BTstack sobre el CYW43439 (mismo chip en Pico WH y Pico 2 W).
+# Se enlaza solo con SAVIA_ENABLE_BLE=ON (cuando el módulo BLE esté implementado).
+if(SAVIA_ENABLE_BLE)
+  target_compile_definitions(savia_c PRIVATE SAVIA_ENABLE_BLE=1)
+  target_link_libraries(savia_c
+    pico_cyw43_arch_none    # init del CYW43 (BLE; sin lwIP)
+    pico_btstack_ble        # GATT server
+    pico_btstack_cyw43
+  )
+endif()
 
 # TFLite Micro solo se enlaza con inferencia on-device (Pico 2 W).
 # Añadir pico-tflmicro como submódulo en lib/ (ver docs/BUILD.md):
