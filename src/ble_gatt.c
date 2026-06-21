@@ -30,6 +30,8 @@
 #define H_DATA_REQUEST  ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000020_01_VALUE_HANDLE
 #define H_DATA_RESPONSE ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000021_01_VALUE_HANDLE
 #define H_DATA_RESP_CCC ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000021_01_CLIENT_CONFIGURATION_HANDLE
+#define H_BLOB_CTRL     ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000030_01_VALUE_HANDLE
+#define H_BLOB_CTRL_CCC ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000030_01_CLIENT_CONFIGURATION_HANDLE
 
 #define APP_AD_FLAGS 0x06
 
@@ -145,6 +147,8 @@ static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_m
     } else if (att_handle == H_DATA_RESP_CCC) {
         g_notify_on = (buffer_size >= 2) && (little_endian_read_16(buffer, 0) & 1);
         printf("BLE: data_response notify %s\n", g_notify_on ? "ON" : "OFF");
+    } else if (att_handle == H_BLOB_CTRL || att_handle == H_BLOB_CTRL_CCC) {
+        // blob_control (firmware/model OTA): stub, present for discovery only.
     }
     return 0;
 }

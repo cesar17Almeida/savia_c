@@ -21,3 +21,7 @@ CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000020, WRITE | DYNAMIC,
 // data_response (0021): {v, op:"chunk", s, t, eof, p} -- notify (chunked).
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000021, NOTIFY | DYNAMIC,
 CLIENT_CHARACTERISTIC_CONFIGURATION,
+// blob_control (0030): firmware/model OTA. STUB -- present so clients that
+// discover the full contract (TerraLink) don't fail; not implemented yet.
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000030, WRITE | NOTIFY | DYNAMIC,
+CLIENT_CHARACTERISTIC_CONFIGURATION,
