@@ -9,6 +9,10 @@
 
 #define SAVIA_MAX_SENSORS 6
 
+// Max advertised BLE name (incl. NUL). The 128-bit service UUID moves to the scan
+// response, so the ADV packet leaves room for a name up to 26 chars; cap at 20.
+#define SAVIA_BLE_NAME_MAX 21
+
 // Accepted range for the app-set deep-sleep time (seconds): 10 s .. 24 h.
 #define SAVIA_SLEEP_MIN_S 10u
 #define SAVIA_SLEEP_MAX_S 86400u
@@ -31,6 +35,9 @@ typedef struct {
 } savia_sensor_slot_t;
 
 typedef struct {
+    // --- Identity ---
+    char ble_name[SAVIA_BLE_NAME_MAX];   // advertised BLE name; app-editable (default "Savia")
+
     // --- Power management ---
     // How long to deep-sleep between acquisition cycles. App-parameterizable.
     // The device wakes on this timeout OR on the wake button (GPIO interrupt).

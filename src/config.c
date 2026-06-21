@@ -6,6 +6,9 @@
 void config_load_defaults(station_config_t *cfg) {
     memset(cfg, 0, sizeof(*cfg));
 
+    // Identity: advertised name (app-editable).
+    strncpy(cfg->ble_name, "Savia", SAVIA_BLE_NAME_MAX - 1);
+
     // Power: 10 min between cycles; button on GPIO15 (to GND, active-low).
     // Deep sleep is OFF by default -- the device stays awake and discoverable
     // until the app enables it; only then does it power the radio down to sleep.

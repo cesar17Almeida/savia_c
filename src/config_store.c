@@ -9,7 +9,7 @@
 #include "pico/flash.h"
 
 #define CFG_MAGIC   0x53564346u                                // 'SVCF'
-#define CFG_VERSION 1u
+#define CFG_VERSION 2u                                          // bumped: added ble_name
 #define CFG_OFFSET  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE) // last 4 KB sector
 
 typedef struct {
@@ -19,6 +19,10 @@ typedef struct {
     station_config_t cfg;
     uint32_t crc;              // crc32 over [magic .. cfg]
 } cfg_record_t;
+
+// do_save programs exactly one flash page; the record must fit or it is silently
+// truncated and the CRC check then rejects every load.
+_Static_assert(sizeof(cfg_record_t) <= FLASH_PAGE_SIZE, "cfg_record_t exceeds one flash page");
 
 static uint32_t crc32(const uint8_t *p, size_t n) {
     uint32_t c = 0xffffffffu;

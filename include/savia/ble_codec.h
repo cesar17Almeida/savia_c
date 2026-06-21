@@ -74,6 +74,7 @@ typedef struct {
     bool     ok;
     int      version;
     char     op[12];
+    bool     has_name;        char     name[SAVIA_BLE_NAME_MAX];
     bool     has_sleep_s;     uint32_t sleep_s;
     bool     has_deep_sleep;  bool     deep_sleep;
     bool     has_capture_s;   uint32_t capture_s;

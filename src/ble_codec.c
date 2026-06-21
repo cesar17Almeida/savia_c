@@ -323,7 +323,7 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
                             uint8_t *out, size_t cap) {
     cbor_writer_t w;
     cbor_w_init(&w, out, cap);
-    cbor_w_map(&w, 10);
+    cbor_w_map(&w, 11);
 
     cbor_w_textz(&w, "v"); cbor_w_uint(&w, SAVIA_PROTOCOL_VERSION);
 
@@ -335,6 +335,7 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
     cbor_w_textz(&w, "img");   cbor_w_textz(&w, dev->img);
     cbor_w_textz(&w, "fw");    cbor_w_textz(&w, dev->fw);
 
+    cbor_w_textz(&w, "name");       cbor_w_textz(&w, cfg->ble_name);
     cbor_w_textz(&w, "sleep_s");    cbor_w_uint(&w, cfg->sleep_seconds);
     cbor_w_textz(&w, "deep_sleep"); cbor_w_bool(&w, cfg->deep_sleep_enabled);
     cbor_w_textz(&w, "capture_s");  cbor_w_uint(&w, cfg->capture_interval_s);
@@ -376,6 +377,12 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
             const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
             if (sn >= sizeof(out->op)) sn = sizeof(out->op) - 1;
             memcpy(out->op, s, sn); out->op[sn] = 0;
+        } else if (cbor_text_eq(k, kn, "name")) {
+            if (!cbor_r_null(&r)) {
+                const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
+                if (sn >= sizeof(out->name)) sn = sizeof(out->name) - 1;
+                memcpy(out->name, s, sn); out->name[sn] = 0; out->has_name = true;
+            }
         } else if (cbor_text_eq(k, kn, "sleep_s")) {
             if (!cbor_r_null(&r)) {
                 uint64_t v; if (!cbor_r_uint(&r, &v)) return false;

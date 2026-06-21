@@ -28,6 +28,7 @@
 #include "savia/log.h"
 
 // --- generated ATT handles --------------------------------------------------
+#define H_GAP_NAME      ATT_CHARACTERISTIC_GAP_DEVICE_NAME_01_VALUE_HANDLE
 #define H_STATUS        ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000010_01_VALUE_HANDLE
 #define H_TIME_SYNC     ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000011_01_VALUE_HANDLE
 #define H_WEATHER       ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000012_01_VALUE_HANDLE
@@ -42,14 +43,35 @@
 
 #define APP_AD_FLAGS 0x06
 
-static const uint8_t adv_data[] = {
-    0x02, BLUETOOTH_DATA_TYPE_FLAGS, APP_AD_FLAGS,
-    0x06, BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME, 'S', 'a', 'v', 'i', 'a',
+// ADV packet: flags + complete local name (app-editable, built at runtime). The
+// 128-bit service UUID moves to the scan response so the name has room to grow.
+static uint8_t g_adv_data[31];
+static uint8_t g_adv_data_len;
+
+// Scan response: the 128-bit Savia service UUID (little-endian), so a central can
+// still filter by service even though it no longer rides in the ADV packet.
+static const uint8_t scan_resp_data[] = {
     0x11, BLUETOOTH_DATA_TYPE_COMPLETE_LIST_OF_128_BIT_SERVICE_CLASS_UUIDS,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0xa0, 0x71, 0x5a,
 };
-static const uint8_t adv_data_len = sizeof(adv_data);
+
+// Build the ADV packet from `name`, clamped to what fits after the flags field.
+static void build_adv_data(const char *name) {
+    size_t nlen = name ? strlen(name) : 0;
+    if (nlen == 0) { name = "Savia"; nlen = 5; }
+    size_t max_name = sizeof(g_adv_data) - 3 /* flags */ - 2 /* name AD header */;
+    if (nlen > max_name) nlen = max_name;
+    uint8_t i = 0;
+    g_adv_data[i++] = 0x02;
+    g_adv_data[i++] = BLUETOOTH_DATA_TYPE_FLAGS;
+    g_adv_data[i++] = APP_AD_FLAGS;
+    g_adv_data[i++] = (uint8_t) (nlen + 1);
+    g_adv_data[i++] = BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME;
+    memcpy(g_adv_data + i, name, nlen);
+    i = (uint8_t) (i + nlen);
+    g_adv_data_len = i;
+}
 
 static btstack_packet_callback_registration_t hci_event_cb;
 static hci_con_handle_t g_con = HCI_CON_HANDLE_INVALID;
@@ -76,8 +98,8 @@ static size_t   g_resp_len, g_resp_seq, g_resp_total;
 // query scratch (BTstack context is single-threaded -> static is fine).
 // 150 = 48 h x 3 series (HS10/HS30/TA), the LSTM past window.
 static savia_reading_t    q_rd[150];
-static savia_aggregate_t  q_agg[32];
-static savia_prediction_t q_pred[16];
+static savia_aggregate_t  q_agg[160];   // 48 h x up to 3 series x 2 depths of buckets
+static savia_prediction_t q_pred[32];   // holds the full 24 h LSTM forecast
 
 static uint64_t wall_now(void) {
     uint64_t up = to_ms_since_boot(get_absolute_time());
@@ -136,19 +158,19 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
     uint64_t to   = dr.has_to ? dr.to_ms : UINT64_MAX;
     size_t   lim  = dr.has_limit ? (size_t) dr.limit : 0;
 
-    if (strcmp(dr.op, "count") == 0) {
+    if (strcmp(dr.op, SAVIA_OP_COUNT) == 0) {
         uint64_t c = 0;
-        if (strcmp(dr.kind, "raw") == 0)       c = storage_count_raw(from, to);
-        else if (strcmp(dr.kind, "pred") == 0) c = storage_count_pred(from, to);
-        else if (strcmp(dr.kind, "agg") == 0)  c = storage_aggregate_hourly(from, to, 0, q_agg, 32);
-        else if (strcmp(dr.kind, "logs") == 0) c = savia_log_count();
+        if (strcmp(dr.kind, SAVIA_KIND_RAW) == 0)       c = storage_count_raw(from, to);
+        else if (strcmp(dr.kind, SAVIA_KIND_PRED) == 0) c = storage_count_pred(from, to);
+        else if (strcmp(dr.kind, SAVIA_KIND_AGG) == 0)  c = storage_aggregate_hourly(from, to, 0, q_agg, sizeof(q_agg) / sizeof(q_agg[0]));
+        else if (strcmp(dr.kind, SAVIA_KIND_LOGS) == 0) c = savia_log_count();
         g_resp_len = ble_serialize_count(c, g_resp, sizeof(g_resp));
-    } else if (strcmp(dr.op, "clear") == 0) {   // dev: wipe stored data
+    } else if (strcmp(dr.op, SAVIA_OP_CLEAR) == 0) {   // dev: wipe stored data
         storage_clear();
         LOG_INFO("BLE: cleared all data\n");
         g_resp_len = ble_serialize_count(0, g_resp, sizeof(g_resp));
-    } else if (strcmp(dr.op, "mock") == 0) {    // dev: inject mock data
-        if (strcmp(dr.kind, "pred") == 0) {     // synthetic 24 h LSTM forecast
+    } else if (strcmp(dr.op, SAVIA_OP_MOCK) == 0) {    // dev: inject mock data
+        if (strcmp(dr.kind, SAVIA_KIND_PRED) == 0) {   // synthetic 24 h LSTM forecast
             mock_predictions();
             g_resp_len = ble_serialize_count(storage_count_pred(0, UINT64_MAX), g_resp, sizeof(g_resp));
         } else {                                 // one reading (hs10|hs30|ta)
@@ -170,16 +192,16 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
                  ok ? "ok" : "BAD", (unsigned) created, (unsigned) updated);
         g_resp_len = ble_serialize_ingest_ok(created, updated, g_resp, sizeof(g_resp));
     } else {  // GET
-        if (strcmp(dr.kind, "raw") == 0) {
+        if (strcmp(dr.kind, SAVIA_KIND_RAW) == 0) {
             size_t n = storage_query_raw(from, to, lim, q_rd, sizeof(q_rd) / sizeof(q_rd[0]));
             g_resp_len = ble_serialize_readings(q_rd, n, g_resp, sizeof(g_resp));
-        } else if (strcmp(dr.kind, "agg") == 0) {
-            size_t n = storage_aggregate_hourly(from, to, lim, q_agg, 32);
+        } else if (strcmp(dr.kind, SAVIA_KIND_AGG) == 0) {
+            size_t n = storage_aggregate_hourly(from, to, lim, q_agg, sizeof(q_agg) / sizeof(q_agg[0]));
             g_resp_len = ble_serialize_aggregations(q_agg, n, g_resp, sizeof(g_resp));
-        } else if (strcmp(dr.kind, "pred") == 0) {
-            size_t n = storage_query_pred(from, to, lim, q_pred, 16);
+        } else if (strcmp(dr.kind, SAVIA_KIND_PRED) == 0) {
+            size_t n = storage_query_pred(from, to, lim, q_pred, sizeof(q_pred) / sizeof(q_pred[0]));
             g_resp_len = ble_serialize_predictions(q_pred, n, g_resp, sizeof(g_resp));
-        } else if (strcmp(dr.kind, "logs") == 0) {
+        } else if (strcmp(dr.kind, SAVIA_KIND_LOGS) == 0) {
             unsigned ln = savia_log_count();
             const char *lines[64];
             if (ln > 64) ln = 64;
@@ -236,6 +258,18 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
                 g_cfg->daily_hour = cp.daily_hour;
                 g_config_dirty = true;
                 LOG_INFO("BLE: config set daily_hour=%u\n", (unsigned) cp.daily_hour);
+            }
+        }
+        if (ok && cp.has_name && g_cfg) {
+            if (cp.name[0] == 0) {
+                ok = false; err = "name empty";
+            } else {
+                strncpy(g_cfg->ble_name, cp.name, SAVIA_BLE_NAME_MAX - 1);
+                g_cfg->ble_name[SAVIA_BLE_NAME_MAX - 1] = 0;
+                build_adv_data(g_cfg->ble_name);
+                gap_advertisements_set_data(g_adv_data_len, g_adv_data);  // applies on next adv
+                g_config_dirty = true;
+                LOG_INFO("BLE: config set name='%s'\n", g_cfg->ble_name);
             }
         }
         if (ok && cp.has_mock && g_cfg) {
@@ -313,6 +347,11 @@ static void handle_auth_write(const uint8_t *buf, uint16_t len) {
 static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
                             uint16_t offset, uint8_t *buffer, uint16_t buffer_size) {
     (void) con;
+    if (att_handle == H_GAP_NAME) {   // standard Device Name (0x2A00) == advertised name
+        const char *name = (g_cfg && g_cfg->ble_name[0]) ? g_cfg->ble_name : "Savia";
+        return att_read_callback_handle_blob((const uint8_t *) name, strlen(name),
+                                             offset, buffer, buffer_size);
+    }
     if (att_handle == H_STATUS) {
         uint8_t tmp[96];
         uint32_t up_s = (uint32_t)(to_ms_since_boot(get_absolute_time()) / 1000);
@@ -383,7 +422,7 @@ static void packet_handler(uint8_t type, uint16_t channel, uint8_t *packet, uint
     switch (hci_event_packet_get_type(packet)) {
         case BTSTACK_EVENT_STATE:
             if (btstack_event_state_get_state(packet) == HCI_STATE_WORKING)
-                LOG_INFO("BLE: up, advertising as 'Savia'\n");
+                LOG_INFO("BLE: up, advertising as '%s'\n", g_cfg ? g_cfg->ble_name : "Savia");
             break;
         case HCI_EVENT_LE_META:
             if (hci_event_le_meta_get_subevent_code(packet) ==
@@ -444,7 +483,9 @@ static void ble_bringup(void) {
     bd_addr_t null_addr;
     memset(null_addr, 0, sizeof(null_addr));
     gap_advertisements_set_params(adv_int_min, adv_int_max, 0, 0, null_addr, 0x07, 0x00);
-    gap_advertisements_set_data(adv_data_len, (uint8_t *) adv_data);
+    build_adv_data(g_cfg ? g_cfg->ble_name : "Savia");
+    gap_advertisements_set_data(g_adv_data_len, g_adv_data);
+    gap_scan_response_set_data(sizeof(scan_resp_data), (uint8_t *) scan_resp_data);
     gap_advertisements_enable(1);
     hci_power_control(HCI_POWER_ON);
 }
@@ -464,7 +505,7 @@ void ble_radio_suspend(void) {
 
 void ble_radio_resume(void) {
     ble_bringup();
-    LOG_INFO("BLE: radio resumed, advertising as 'Savia'\n");
+    LOG_INFO("BLE: radio resumed, advertising as '%s'\n", g_cfg ? g_cfg->ble_name : "Savia");
 }
 
 void ble_poll(uint32_t budget_ms) {

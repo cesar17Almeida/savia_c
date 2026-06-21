@@ -83,6 +83,7 @@ int main(void) {
     assert(n > 0);
     ble_config_patch_t cp;
     assert(ble_parse_config_patch(in, n, &cp));
+    assert(cp.has_name && strcmp(cp.name, "Huerta-1") == 0);
     assert(cp.version == 1 && strcmp(cp.op, "set") == 0 && cp.has_sleep_s && cp.sleep_s == 300);
     assert(cp.has_deep_sleep && cp.deep_sleep == true);
     assert(cp.has_capture_s && cp.capture_s == 120 && cp.has_daily_hour && cp.daily_hour == 6);

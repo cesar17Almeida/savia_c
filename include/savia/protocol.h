@@ -22,7 +22,7 @@
 #define SAVIA_OP_GET         "get"
 #define SAVIA_OP_COUNT       "count"
 #define SAVIA_OP_CLEAR       "clear"   // wipe stored data (dev)
-#define SAVIA_OP_MOCK        "mock"    // inject one mock reading (dev): kind=hs10|hs30|ta
+#define SAVIA_OP_MOCK        "mock"    // inject mock data (dev): kind=hs10|hs30|ta reading, or pred forecast
 #define SAVIA_OP_INGEST      "ingest"     // upsert timestamped points: data:[{ts_ms,kind,value,depth_cm?}]
 #define SAVIA_OP_INGEST_OK   "ingest_ok"  // ack: {created,updated}
 #define SAVIA_OP_INFER       "infer"

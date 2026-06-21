@@ -28,8 +28,9 @@ def gen():
                              "data": {"past_ta_hourly": [20.0] * 4,
                                       "future_ta_hourly": [22.0] * 2}}))
     with open("/tmp/savia_config_patch.cbor", "wb") as f:
-        f.write(cbor2.dumps({"v": 1, "op": "set", "sleep_s": 300, "deep_sleep": True,
-                             "capture_s": 120, "daily_hour": 6, "mock": True, "log_level": 0}))
+        f.write(cbor2.dumps({"v": 1, "op": "set", "name": "Huerta-1", "sleep_s": 300,
+                             "deep_sleep": True, "capture_s": 120, "daily_hour": 6,
+                             "mock": True, "log_level": 0}))
     # ingest: timestamped points (mix of air_temperature + soil_moisture w/ depth)
     with open("/tmp/savia_ingest.cbor", "wb") as f:
         f.write(cbor2.dumps({"v": 1, "op": "ingest", "data": [
@@ -96,9 +97,9 @@ def check():
 
     # 7) config snapshot (device card + sleep + schedule + sensors)
     cfg = load("config")
-    assert set(cfg.keys()) == {"v", "device", "sleep_s", "deep_sleep", "capture_s",
+    assert set(cfg.keys()) == {"v", "device", "name", "sleep_s", "deep_sleep", "capture_s",
                                "daily_hour", "mock", "log_level", "wake_gpio", "sensors"}
-    assert cfg["v"] == 1 and cfg["sleep_s"] == 3600 and cfg["wake_gpio"] == 15
+    assert cfg["v"] == 1 and cfg["name"] == "Savia" and cfg["sleep_s"] == 3600 and cfg["wake_gpio"] == 15
     assert cfg["deep_sleep"] is False   # default OFF
     assert cfg["capture_s"] == 3600 and cfg["daily_hour"] == 20
     assert cfg["mock"] is True and cfg["log_level"] == 1   # dev defaults

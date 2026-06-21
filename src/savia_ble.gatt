@@ -3,7 +3,9 @@
 // Compiled to savia_ble.h by the Pico SDK (pico_btstack_make_gatt_header).
 
 PRIMARY_SERVICE, GAP_SERVICE
-CHARACTERISTIC, GAP_DEVICE_NAME, READ, "Savia"
+// DYNAMIC: served from cfg->ble_name so a connected central reads the same name
+// it saw advertised (which is app-editable), not a baked-in "Savia".
+CHARACTERISTIC, GAP_DEVICE_NAME, READ | DYNAMIC, "Savia"
 
 PRIMARY_SERVICE, GATT_SERVICE
 CHARACTERISTIC, GATT_DATABASE_HASH, READ,
@@ -16,8 +18,9 @@ CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000010, READ | DYNAMIC,
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000011, WRITE | DYNAMIC,
 // weather (0012): {v, op:"upd", data:{...}} -- write.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000012, WRITE | DYNAMIC,
-// config (0013): read = full snapshot {v, device, sleep_s, wake_gpio, sensors, gpio};
-// write = patch {v, op:"set", sleep_s?}; notify = ack {v, op:"config_ok"/"config_err"}.
+// config (0013): read = snapshot {v, device, name, sleep_s, deep_sleep, capture_s,
+//   daily_hour, mock, log_level, wake_gpio, sensors}; write = patch (any of those
+//   fields); notify = ack {v, op:"config_ok"/"config_err"}.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000013, READ | WRITE | NOTIFY | DYNAMIC,
 CLIENT_CHARACTERISTIC_CONFIGURATION,
 // auth (0014): read = {v, prov, authed, nonce}; write = {op:"setpw"/"auth"/"chgpw", ...}.

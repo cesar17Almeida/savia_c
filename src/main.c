@@ -48,6 +48,17 @@ int main(void) {
     savia_log_set_level(cfg.log_level);
 
     power_init(&cfg);
+
+    // Recovery: power on with the wake button held -> factory reset (wipes the
+    // password and all settings back to defaults). The reverted BLE name ("Savia")
+    // is the visible confirmation.
+    if (power_reset_button_held(&cfg, SAVIA_FACTORY_RESET_HOLD_MS)) {
+        LOG_WARN("button held at boot -> factory reset (clearing password + config)\n");
+        config_load_defaults(&cfg);
+        config_store_save(&cfg);
+        savia_log_set_level(cfg.log_level);
+    }
+
     sensor_init(&cfg);
     storage_init();
     bool mock_seeded = false;

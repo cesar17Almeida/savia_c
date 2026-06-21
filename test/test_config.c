@@ -3,11 +3,15 @@
 // firmware's pure logic on the PC -- the same idea as savia_py's pytest suite.
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include "savia/config.h"
 
 int main(void) {
     station_config_t cfg;
     config_load_defaults(&cfg);
+
+    // Identity: default advertised name.
+    assert(strcmp(cfg.ble_name, "Savia") == 0);
 
     // Power defaults (Pico-era requirements: sleep time + wake button).
     assert(cfg.sleep_seconds == 3600);   // 1 h, aligned with hourly capture

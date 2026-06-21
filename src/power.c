@@ -9,6 +9,17 @@ void power_init(const station_config_t *cfg) {
     gpio_pull_up(cfg->wake_button_gpio);
 }
 
+bool power_reset_button_held(const station_config_t *cfg, uint32_t hold_ms) {
+    const uint32_t step_ms = 50;
+    uint32_t elapsed = 0;
+    while (elapsed < hold_ms) {
+        if (gpio_get(cfg->wake_button_gpio)) return false;  // released early -> abort
+        sleep_ms(step_ms);
+        elapsed += step_ms;
+    }
+    return true;   // held low the whole window
+}
+
 savia_wake_reason_t power_deep_sleep(const station_config_t *cfg, uint32_t seconds) {
     // TODO(hw): real DORMANT. Switch clocks to the low-power source and arm the
     // wake button as a dormant GPIO wake source (RP2040: clocks + xosc dormant;
