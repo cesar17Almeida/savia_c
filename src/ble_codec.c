@@ -71,7 +71,9 @@ bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *
 
     uint64_t count;
     if (!cbor_r_map(&r, &count)) return false;
-    for (uint64_t i = 0; i < count; i++) {
+    for (uint64_t i = 0; ; i++) {
+        if (count == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
+        else if (i >= count) break;
         const char *k; size_t kn;
         if (!cbor_r_text(&r, &k, &kn)) return false;
 
@@ -169,7 +171,9 @@ bool ble_parse_time_sync(const uint8_t *buf, size_t len, uint64_t *ms_out) {
     if (!cbor_r_map(&r, &count)) return false;
     bool ok_op = false, have_ms = false;
     int ver = 0;
-    for (uint64_t i = 0; i < count; i++) {
+    for (uint64_t i = 0; ; i++) {
+        if (count == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
+        else if (i >= count) break;
         const char *k; size_t kn;
         if (!cbor_r_text(&r, &k, &kn)) return false;
         if (cbor_text_eq(k, kn, "v")) {
@@ -193,7 +197,9 @@ bool ble_parse_weather(const uint8_t *buf, size_t len) {
     if (!cbor_r_map(&r, &count)) return false;
     bool ok_op = false, have_data = false;
     int ver = 0;
-    for (uint64_t i = 0; i < count; i++) {
+    for (uint64_t i = 0; ; i++) {
+        if (count == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
+        else if (i >= count) break;
         const char *k; size_t kn;
         if (!cbor_r_text(&r, &k, &kn)) return false;
         if (cbor_text_eq(k, kn, "v")) {

@@ -22,6 +22,7 @@
 #include "savia/storage.h"
 #include "savia/clock.h"
 #include "savia/protocol.h"
+#include "savia/log.h"
 
 // --- generated ATT handles --------------------------------------------------
 #define H_STATUS        ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000010_01_VALUE_HANDLE
@@ -78,7 +79,7 @@ static void send_next_chunk(void) {
 static void handle_data_request(const uint8_t *buf, uint16_t len) {
     ble_data_request_t dr;
     if (!ble_parse_data_request(buf, len, &dr)) {
-        printf("BLE: bad data_request\n");
+        LOG_INFO("BLE: bad data_request\n");
         return;
     }
     uint64_t from = dr.has_from ? dr.from_ms : 0;
@@ -108,7 +109,7 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
 
     g_resp_seq = 0;
     g_resp_total = ble_chunk_total(g_resp_len, BLE_DATA_CHUNK_BYTES);
-    printf("BLE: data_request %s/%s -> %u B in %u frame(s)\n",
+    LOG_INFO("BLE: data_request %s/%s -> %u B in %u frame(s)\n",
            dr.op, dr.kind, (unsigned) g_resp_len, (unsigned) g_resp_total);
     if (g_con != HCI_CON_HANDLE_INVALID) att_server_request_can_send_now_event(g_con);
 }
@@ -131,22 +132,24 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
 static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_mode,
                         uint16_t offset, uint8_t *buffer, uint16_t buffer_size) {
     (void) con; (void) tx_mode; (void) offset;
+    LOG_DEBUG("BLE: write handle=0x%04x len=%u\n", att_handle, buffer_size);
+    log_hexdump("  <- phone", buffer, buffer_size);
     if (att_handle == H_TIME_SYNC) {
         uint64_t ms;
         if (ble_parse_time_sync(buffer, buffer_size, &ms)) {
             clock_set(ms, to_ms_since_boot(get_absolute_time()));
-            printf("BLE: time_sync -> %llu ms\n", (unsigned long long) ms);
-        } else printf("BLE: bad time_sync\n");
+            LOG_INFO("BLE: time_sync -> %llu ms\n", (unsigned long long) ms);
+        } else LOG_INFO("BLE: bad time_sync\n");
     } else if (att_handle == H_WEATHER) {
         if (ble_parse_weather(buffer, buffer_size)) {
             g_weather_updated_ms = wall_now();
-            printf("BLE: weather cached\n");
-        } else printf("BLE: bad weather\n");
+            LOG_INFO("BLE: weather cached\n");
+        } else LOG_INFO("BLE: bad weather\n");
     } else if (att_handle == H_DATA_REQUEST) {
         handle_data_request(buffer, buffer_size);
     } else if (att_handle == H_DATA_RESP_CCC) {
         g_notify_on = (buffer_size >= 2) && (little_endian_read_16(buffer, 0) & 1);
-        printf("BLE: data_response notify %s\n", g_notify_on ? "ON" : "OFF");
+        LOG_INFO("BLE: data_response notify %s\n", g_notify_on ? "ON" : "OFF");
     } else if (att_handle == H_BLOB_CTRL || att_handle == H_BLOB_CTRL_CCC) {
         // blob_control (firmware/model OTA): stub, present for discovery only.
     }
@@ -159,20 +162,20 @@ static void packet_handler(uint8_t type, uint16_t channel, uint8_t *packet, uint
     switch (hci_event_packet_get_type(packet)) {
         case BTSTACK_EVENT_STATE:
             if (btstack_event_state_get_state(packet) == HCI_STATE_WORKING)
-                printf("BLE: up, advertising as 'Savia'\n");
+                LOG_INFO("BLE: up, advertising as 'Savia'\n");
             break;
         case HCI_EVENT_LE_META:
             if (hci_event_le_meta_get_subevent_code(packet) ==
                 HCI_SUBEVENT_LE_CONNECTION_COMPLETE) {
                 g_con = hci_subevent_le_connection_complete_get_connection_handle(packet);
-                printf("BLE: central connected\n");
+                LOG_INFO("BLE: central connected\n");
             }
             break;
         case HCI_EVENT_DISCONNECTION_COMPLETE:
             g_con = HCI_CON_HANDLE_INVALID;
             g_notify_on = false;
             g_resp_seq = g_resp_total = 0;
-            printf("BLE: disconnected\n");
+            LOG_INFO("BLE: disconnected\n");
             break;
         case ATT_EVENT_CAN_SEND_NOW:
             send_next_chunk();
@@ -185,7 +188,7 @@ static void packet_handler(uint8_t type, uint16_t channel, uint8_t *packet, uint
 void ble_init(const station_config_t *cfg) {
     (void) cfg;
     if (cyw43_arch_init()) {
-        printf("BLE: cyw43_arch_init FAILED\n");
+        LOG_INFO("BLE: cyw43_arch_init FAILED\n");
         return;
     }
     l2cap_init();
@@ -204,7 +207,7 @@ void ble_init(const station_config_t *cfg) {
     gap_advertisements_enable(1);
 
     hci_power_control(HCI_POWER_ON);
-    printf("BLE: Savia GATT ready (status/time_sync/weather/data_request/data_response)\n");
+    LOG_INFO("BLE: Savia GATT ready (status/time_sync/weather/data_request/data_response)\n");
 }
 
 void ble_poll(uint32_t budget_ms) {

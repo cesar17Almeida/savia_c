@@ -97,10 +97,21 @@ static bool r_head(cbor_reader_t *r, uint8_t *major, uint64_t *val) {
 }
 
 bool cbor_r_map(cbor_reader_t *r, uint64_t *count) {
+    if (r->err || r->pos >= r->len) { r->err = true; return false; }
+    if (r->buf[r->pos] == 0xbf) {           // indefinite-length map (kotlinx-cbor)
+        r->pos++;
+        *count = SAVIA_CBOR_INDEFINITE;
+        return true;
+    }
     uint8_t major; uint64_t val;
     if (!r_head(r, &major, &val) || major != 5) { r->err = true; return false; }
     *count = val;
     return true;
+}
+
+bool cbor_r_at_break(cbor_reader_t *r) {
+    if (r->pos < r->len && r->buf[r->pos] == 0xff) { r->pos++; return true; }
+    return false;
 }
 
 bool cbor_r_text(cbor_reader_t *r, const char **s, size_t *n) {
@@ -121,13 +132,22 @@ bool cbor_r_uint(cbor_reader_t *r, uint64_t *v) {
 }
 
 bool cbor_r_skip(cbor_reader_t *r) {
+    if (r->err || r->pos >= r->len) { r->err = true; return false; }
+    uint8_t ib = r->buf[r->pos];
+    // Indefinite-length bytes(0x5f)/text(0x7f)/array(0x9f)/map(0xbf): skip items
+    // until the 0xff break.
+    if (ib == 0x5f || ib == 0x7f || ib == 0x9f || ib == 0xbf) {
+        r->pos++;
+        while (!cbor_r_at_break(r)) {
+            if (r->err || r->pos >= r->len) { r->err = true; return false; }
+            if (!cbor_r_skip(r)) return false;
+        }
+        return true;
+    }
     uint8_t major; uint64_t val;
     if (!r_head(r, &major, &val)) return false;
     switch (major) {
-        case 0: case 1: case 7:        // uint / negint / simple+float
-            if (major == 7) {          // float payload already consumed via ai bytes?
-                // ai 25/26/27 floats: r_head consumed their bytes already; 20-23 simple: none.
-            }
+        case 0: case 1: case 7:        // uint / negint / simple+float (bytes consumed by r_head)
             return !r->err;
         case 2: case 3:                // bytes / text: skip `val` bytes
             if (r->pos + val > r->len) { r->err = true; return false; }

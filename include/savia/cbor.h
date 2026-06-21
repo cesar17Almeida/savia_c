@@ -8,6 +8,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+// cbor_r_map sets *count to this for an indefinite-length map (kotlinx-cbor
+// encodes maps as 0xbf ... 0xff; cbor2 uses definite length). Both supported.
+#define SAVIA_CBOR_INDEFINITE UINT64_MAX
+
 // --- Writer -----------------------------------------------------------------
 typedef struct {
     uint8_t *buf;
@@ -37,7 +41,8 @@ typedef struct {
 } cbor_reader_t;
 
 void cbor_r_init(cbor_reader_t *r, const uint8_t *buf, size_t len);
-bool cbor_r_map(cbor_reader_t *r, uint64_t *count);     // read map header
+bool cbor_r_map(cbor_reader_t *r, uint64_t *count);     // *count=SAVIA_CBOR_INDEFINITE if indefinite
+bool cbor_r_at_break(cbor_reader_t *r);                 // consume a 0xff break; true if present
 bool cbor_r_text(cbor_reader_t *r, const char **s, size_t *n);  // ptr into buf
 bool cbor_r_uint(cbor_reader_t *r, uint64_t *v);
 bool cbor_r_skip(cbor_reader_t *r);   // skip any one value (incl. nested)

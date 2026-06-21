@@ -52,6 +52,12 @@ add_executable(savia_c
 
 target_include_directories(savia_c PRIVATE include)
 
+# Nivel de log: -DSAVIA_LOG_LEVEL=0 (DEBUG, vuelca bytes BLE) | 1 (INFO, def) | 2 (WARN).
+if(NOT DEFINED SAVIA_LOG_LEVEL)
+  set(SAVIA_LOG_LEVEL 1)
+endif()
+target_compile_definitions(savia_c PRIVATE SAVIA_LOG_LEVEL=${SAVIA_LOG_LEVEL})
+
 # Nombre del binario según placa + ubicación de la inferencia, para no mezclarlos.
 if(SAVIA_ON_DEVICE_INFERENCE)
   target_compile_definitions(savia_c PRIVATE SAVIA_ON_DEVICE_INFERENCE=1)

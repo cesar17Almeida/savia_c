@@ -43,6 +43,15 @@ int main(void) {
            dr.has_limit && dr.limit == 50);
     printf("test_ble_codec: data_request parse OK\n");
 
+    // indefinite-length map (kotlinx-cbor style): {v:1, op:"get", kind:"raw"}
+    static const uint8_t indef[] = {
+        0xBF, 0x61, 'v', 0x01, 0x62, 'o', 'p', 0x63, 'g', 'e', 't',
+        0x64, 'k', 'i', 'n', 'd', 0x63, 'r', 'a', 'w', 0xFF };
+    ble_data_request_t dr2;
+    assert(ble_parse_data_request(indef, sizeof(indef), &dr2));
+    assert(dr2.version == 1 && strcmp(dr2.op, "get") == 0 && strcmp(dr2.kind, "raw") == 0);
+    printf("test_ble_codec: indefinite-length data_request parse OK\n");
+
     // --- parse time_sync ---
     n = read_file("/tmp/savia_timesync.cbor", in, sizeof(in));
     assert(n > 0);
