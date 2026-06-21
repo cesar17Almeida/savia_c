@@ -55,7 +55,37 @@ int main(void) {
     storage_append_prediction(&p);
     savia_prediction_t po[4];
     assert(storage_query_pred(0, UINT64_MAX, 0, po, 4) == 1);
+    storage_clear_predictions();                          // wipes preds, keeps readings
+    assert(storage_count_pred(0, UINT64_MAX) == 0);
+    assert(storage_count_raw(0, UINT64_MAX) == 4);
     printf("test_storage: predictions OK\n");
+
+    // --- upsert: create then update by (ts_ms, port, kind, depth_cm) ---
+    storage_clear();
+    bool created;
+    savia_reading_t u = { .ts_ms = hour0 + 1000, .port = 1, .depth_cm = 30,
+                          .kind = READING_SOIL_MOISTURE, .value = 0.70f };
+    assert(storage_upsert_reading(&u, &created) && created);          // new
+    assert(storage_count_raw(0, UINT64_MAX) == 1);
+    u.value = 0.81f;
+    assert(storage_upsert_reading(&u, &created) && !created);         // same key -> update
+    assert(storage_count_raw(0, UINT64_MAX) == 1);                    // no new row
+    savia_reading_t uo[4];
+    assert(storage_query_raw(0, UINT64_MAX, 0, uo, 4) == 1);
+    assert(uo[0].value > 0.80f && uo[0].value < 0.82f);              // value overwritten
+    u.depth_cm = 10;                                                  // different depth -> new row
+    assert(storage_upsert_reading(&u, &created) && created);
+    assert(storage_count_raw(0, UINT64_MAX) == 2);
+    u.ts_ms = hour0 + 2000;                                           // different ts -> new row
+    assert(storage_upsert_reading(&u, &created) && created);
+    assert(storage_count_raw(0, UINT64_MAX) == 3);
+    printf("test_storage: upsert OK\n");
+
+    // --- clear wipes readings + predictions ---
+    storage_clear();
+    assert(storage_count_raw(0, UINT64_MAX) == 0);
+    assert(storage_count_pred(0, UINT64_MAX) == 0);
+    printf("test_storage: clear OK\n");
 
     printf("test_storage: OK\n");
     return 0;

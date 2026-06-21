@@ -16,6 +16,12 @@ CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000010, READ | DYNAMIC,
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000011, WRITE | DYNAMIC,
 // weather (0012): {v, op:"upd", data:{...}} -- write.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000012, WRITE | DYNAMIC,
+// config (0013): read = full snapshot {v, device, sleep_s, wake_gpio, sensors, gpio};
+// write = patch {v, op:"set", sleep_s?}; notify = ack {v, op:"config_ok"/"config_err"}.
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000013, READ | WRITE | NOTIFY | DYNAMIC,
+CLIENT_CHARACTERISTIC_CONFIGURATION,
+// auth (0014): read = {v, prov, authed, nonce}; write = {op:"setpw"/"auth"/"chgpw", ...}.
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000014, READ | WRITE | DYNAMIC,
 // data_request (0020): {v, op:"get"/"count", kind, from?, to?, limit?} -- write.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000020, WRITE | DYNAMIC,
 // data_response (0021): {v, op:"chunk", s, t, eof, p} -- notify (chunked).

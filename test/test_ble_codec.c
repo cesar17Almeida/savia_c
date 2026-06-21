@@ -78,8 +78,48 @@ int main(void) {
     assert(ble_parse_weather(in, n));
     printf("test_ble_codec: weather parse OK\n");
 
+    // --- parse config patch (from cbor2) ---
+    n = read_file("/tmp/savia_config_patch.cbor", in, sizeof(in));
+    assert(n > 0);
+    ble_config_patch_t cp;
+    assert(ble_parse_config_patch(in, n, &cp));
+    assert(cp.version == 1 && strcmp(cp.op, "set") == 0 && cp.has_sleep_s && cp.sleep_s == 300);
+    assert(cp.has_deep_sleep && cp.deep_sleep == true);
+    assert(cp.has_capture_s && cp.capture_s == 120 && cp.has_daily_hour && cp.daily_hour == 6);
+    assert(cp.has_mock && cp.mock == true && cp.has_log_level && cp.log_level == 0);
+    printf("test_ble_codec: config patch parse OK\n");
+
+    // indefinite-length config patch (kotlinx-cbor): {v:1, op:"set", sleep_s:300, deep_sleep:true}
+    static const uint8_t cp_indef[] = {
+        0xBF, 0x61, 'v', 0x01, 0x62, 'o', 'p', 0x63, 's', 'e', 't',
+        0x67, 's', 'l', 'e', 'e', 'p', '_', 's', 0x19, 0x01, 0x2C,
+        0x6A, 'd', 'e', 'e', 'p', '_', 's', 'l', 'e', 'e', 'p', 0xF5, 0xFF };
+    ble_config_patch_t cp2;
+    assert(ble_parse_config_patch(cp_indef, sizeof(cp_indef), &cp2));
+    assert(cp2.version == 1 && strcmp(cp2.op, "set") == 0 && cp2.has_sleep_s && cp2.sleep_s == 300);
+    assert(cp2.has_deep_sleep && cp2.deep_sleep == true);
+    printf("test_ble_codec: indefinite-length config patch parse OK\n");
+
     uint8_t buf[512];
     size_t l;
+
+    // --- parse ingest (timestamped upsert points from cbor2) ---
+    n = read_file("/tmp/savia_ingest.cbor", in, sizeof(in));
+    assert(n > 0);
+    savia_reading_t ing[8];
+    bool iok;
+    size_t ni = ble_parse_ingest(in, n, ing, 8, &iok);
+    assert(iok && ni == 3);
+    assert(ing[0].kind == READING_AIR_TEMPERATURE && ing[0].ts_ms == 1781996400000ULL);
+    assert(ing[0].depth_cm == 0 && ing[0].port == 1);                  // air defaults
+    assert(ing[2].kind == READING_SOIL_MOISTURE && ing[2].depth_cm == 30);
+    l = ble_serialize_readings(ing, ni, buf, sizeof(buf));             // echo for Python check
+    assert(l > 0);
+    write_file("/tmp/savia_ingest_parsed.cbor", buf, l);
+    l = ble_serialize_ingest_ok(3, 1, buf, sizeof(buf));              // 3 created, 1 updated
+    assert(l > 0);
+    write_file("/tmp/savia_ingest_ok.cbor", buf, l);
+    printf("test_ble_codec: ingest parse OK (%zu points)\n", ni);
 
     // --- readings + chunking ---
     savia_reading_t rows[2] = {
@@ -132,7 +172,26 @@ int main(void) {
     assert(l > 0);
     write_file("/tmp/savia_count.cbor", buf, l);
 
-    printf("test_ble_codec: serialized readings/aggs/preds/status/count\n");
+    // --- config snapshot (device card + sleep + sensors + gpio map) + ack ---
+    station_config_t cfg;
+    config_load_defaults(&cfg);
+    savia_device_id_t dev = { .model = "Raspberry Pi Pico WH", .mcu = "RP2040",
+                              .img = "pico_wh", .fw = "0.1.0-c" };
+    l = ble_serialize_config(&dev, &cfg, buf, sizeof(buf));
+    assert(l > 0);
+    write_file("/tmp/savia_config.cbor", buf, l);
+    l = ble_serialize_config_ack(true, 300, true, NULL, buf, sizeof(buf));
+    assert(l > 0);
+    write_file("/tmp/savia_config_ack.cbor", buf, l);
+
+    // --- logs (array of text lines, served chunked via kind="logs") ---
+    const char *loglines[3] = { "boot ok", "BLE: central connected",
+                                "sched: daily cycle (hour=20)" };
+    l = ble_serialize_logs(loglines, 3, buf, sizeof(buf));
+    assert(l > 0);
+    write_file("/tmp/savia_logs.cbor", buf, l);
+
+    printf("test_ble_codec: serialized readings/aggs/preds/status/count/config\n");
     printf("test_ble_codec: OK\n");
     return 0;
 }

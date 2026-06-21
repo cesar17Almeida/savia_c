@@ -39,13 +39,19 @@ pico_sdk_init()
 add_executable(savia_c
   src/main.c
   src/config.c
+  src/config_store.c
+  src/device.c
   src/power.c
+  src/scheduler.c
   src/clock.c
   src/sensor_sdi12.c
   src/storage_flash.c
   src/cbor.c
+  src/sha256.c
+  src/auth.c
   src/ble_codec.c
   src/ble_gatt.c
+  src/log.c
   src/lora_wioe5.c
   src/inference.c
 )
@@ -73,7 +79,9 @@ set_target_properties(savia_c PROPERTIES OUTPUT_NAME "savia_c-${SAVIA_VARIANT}")
 # --- Librerías del Pico SDK -------------------------------------------------
 target_link_libraries(savia_c
   pico_stdlib
-  hardware_flash            # anillo de almacenamiento en flash
+  hardware_flash            # anillo de almacenamiento + config en flash
+  pico_flash                # flash_safe_execute (escritura segura con cyw43/BTstack)
+  pico_rand                 # get_rand_32 -> nonce del handshake auth
   hardware_uart             # LoRa Wio-E5 (comandos AT)
   hardware_pio              # timing de SDI-12
 )

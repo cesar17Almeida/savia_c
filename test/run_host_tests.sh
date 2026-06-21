@@ -19,13 +19,23 @@ echo "== 2) storage + clock test =="
 /tmp/savia_test_storage
 
 echo ""
+echo "== 2b) scheduler test =="
+"$CC" $CFLAGS test/test_scheduler.c src/scheduler.c -o /tmp/savia_test_sched
+/tmp/savia_test_sched
+
+echo ""
+echo "== 2c) sha256 + auth test =="
+"$CC" $CFLAGS test/test_auth.c src/sha256.c src/auth.c -o /tmp/savia_test_auth
+/tmp/savia_test_auth
+
+echo ""
 echo "== 3) BLE codec test + cross-check vs savia_py =="
 PYTHON="../savia_py/.venv/bin/python"
 if [ ! -x "$PYTHON" ]; then
   echo "  !! falta $PYTHON (venv de savia_py con cbor2); salto el cross-check"
 else
   "$PYTHON" test/crosscheck_ble_codec.py gen
-  "$CC" $CFLAGS test/test_ble_codec.c src/ble_codec.c src/cbor.c -o /tmp/savia_test_ble
+  "$CC" $CFLAGS test/test_ble_codec.c src/ble_codec.c src/cbor.c src/config.c -o /tmp/savia_test_ble
   /tmp/savia_test_ble
   "$PYTHON" test/crosscheck_ble_codec.py check
 fi

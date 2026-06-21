@@ -19,6 +19,11 @@ void storage_init(void) {
     s_pred_count = s_pred_head = 0;
 }
 
+void storage_clear(void) {
+    s_rd_count = s_rd_head = 0;
+    s_pred_count = s_pred_head = 0;
+}
+
 // --- helpers ----------------------------------------------------------------
 
 static size_t ring_start(size_t count, size_t head, size_t cap) {
@@ -36,6 +41,22 @@ bool storage_append_reading(const savia_reading_t *r) {
     s_rd_head = (s_rd_head + 1) % READINGS_CAP;
     if (s_rd_count < READINGS_CAP) s_rd_count++;
     return true;
+}
+
+bool storage_upsert_reading(const savia_reading_t *r, bool *created) {
+    size_t idx = ring_start(s_rd_count, s_rd_head, READINGS_CAP);
+    for (size_t i = 0; i < s_rd_count; i++) {
+        savia_reading_t *e = &s_rd[idx];
+        if (e->ts_ms == r->ts_ms && e->port == r->port &&
+            e->kind == r->kind && e->depth_cm == r->depth_cm) {
+            e->value = r->value;            // overwrite in place
+            if (created) *created = false;
+            return true;
+        }
+        idx = (idx + 1) % READINGS_CAP;
+    }
+    if (created) *created = true;
+    return storage_append_reading(r);
 }
 
 size_t storage_query_raw(uint64_t from_ms, uint64_t to_ms, size_t limit,
@@ -112,6 +133,10 @@ bool storage_append_prediction(const savia_prediction_t *p) {
     s_pred_head = (s_pred_head + 1) % PRED_CAP;
     if (s_pred_count < PRED_CAP) s_pred_count++;
     return true;
+}
+
+void storage_clear_predictions(void) {
+    s_pred_count = s_pred_head = 0;
 }
 
 size_t storage_query_pred(uint64_t from_ms, uint64_t to_ms, size_t limit,

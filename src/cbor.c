@@ -109,6 +109,19 @@ bool cbor_r_map(cbor_reader_t *r, uint64_t *count) {
     return true;
 }
 
+bool cbor_r_array(cbor_reader_t *r, uint64_t *count) {
+    if (r->err || r->pos >= r->len) { r->err = true; return false; }
+    if (r->buf[r->pos] == 0x9f) {           // indefinite-length array
+        r->pos++;
+        *count = SAVIA_CBOR_INDEFINITE;
+        return true;
+    }
+    uint8_t major; uint64_t val;
+    if (!r_head(r, &major, &val) || major != 4) { r->err = true; return false; }
+    *count = val;
+    return true;
+}
+
 bool cbor_r_at_break(cbor_reader_t *r) {
     if (r->pos < r->len && r->buf[r->pos] == 0xff) { r->pos++; return true; }
     return false;
@@ -116,6 +129,15 @@ bool cbor_r_at_break(cbor_reader_t *r) {
 
 bool cbor_r_null(cbor_reader_t *r) {
     if (r->pos < r->len && r->buf[r->pos] == 0xf6) { r->pos++; return true; }
+    return false;
+}
+
+bool cbor_r_bool(cbor_reader_t *r, bool *v) {
+    if (r->pos < r->len && (r->buf[r->pos] == 0xf5 || r->buf[r->pos] == 0xf4)) {
+        *v = (r->buf[r->pos] == 0xf5);   // 0xf5 = true, 0xf4 = false
+        r->pos++;
+        return true;
+    }
     return false;
 }
 
@@ -129,11 +151,49 @@ bool cbor_r_text(cbor_reader_t *r, const char **s, size_t *n) {
     return true;
 }
 
+bool cbor_r_bytes(cbor_reader_t *r, const uint8_t **p, size_t *n) {
+    uint8_t major; uint64_t val;
+    if (!r_head(r, &major, &val) || major != 2) { r->err = true; return false; }
+    if (r->pos + val > r->len) { r->err = true; return false; }
+    *p = r->buf + r->pos;
+    *n = (size_t) val;
+    r->pos += val;
+    return true;
+}
+
 bool cbor_r_uint(cbor_reader_t *r, uint64_t *v) {
     uint8_t major; uint64_t val;
     if (!r_head(r, &major, &val) || major != 0) { r->err = true; return false; }
     *v = val;
     return true;
+}
+
+bool cbor_r_double(cbor_reader_t *r, double *v) {
+    if (r->err || r->pos >= r->len) { r->err = true; return false; }
+    uint8_t ib = r->buf[r->pos];
+    if (ib == 0xfb) {                       // IEEE-754 double (big-endian)
+        if (r->pos + 9 > r->len) { r->err = true; return false; }
+        r->pos++;
+        uint64_t bits = 0;
+        for (int i = 0; i < 8; i++) bits = (bits << 8) | r->buf[r->pos++];
+        memcpy(v, &bits, sizeof(*v));
+        return true;
+    }
+    if (ib == 0xfa) {                       // single-precision float
+        if (r->pos + 5 > r->len) { r->err = true; return false; }
+        r->pos++;
+        uint32_t bits = 0;
+        for (int i = 0; i < 4; i++) bits = (bits << 8) | r->buf[r->pos++];
+        float f; memcpy(&f, &bits, sizeof(f));
+        *v = (double) f;
+        return true;
+    }
+    uint8_t major; uint64_t val;            // integer fallback
+    if (!r_head(r, &major, &val)) return false;
+    if (major == 0) { *v = (double) val; return true; }
+    if (major == 1) { *v = -1.0 - (double) val; return true; }
+    r->err = true;
+    return false;
 }
 
 bool cbor_r_skip(cbor_reader_t *r) {

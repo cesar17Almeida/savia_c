@@ -12,8 +12,8 @@ typedef enum {
 
 void power_init(const station_config_t *cfg);
 
-// Enter deep sleep (DORMANT). Returns when either cfg->sleep_seconds elapse or
-// the wake button fires. Returns which one woke us.
-savia_wake_reason_t power_deep_sleep(const station_config_t *cfg);
+// Enter deep sleep for `seconds` (the scheduler caps this to the next mandatory
+// wake). Returns when the time elapses or the wake button fires, and tells which.
+savia_wake_reason_t power_deep_sleep(const station_config_t *cfg, uint32_t seconds);
 
 #endif // SAVIA_POWER_H

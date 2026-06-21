@@ -27,7 +27,17 @@ def gen():
         f.write(cbor2.dumps({"v": 1, "op": "upd",
                              "data": {"past_ta_hourly": [20.0] * 4,
                                       "future_ta_hourly": [22.0] * 2}}))
-    print("gen: wrote request / time_sync / weather inputs")
+    with open("/tmp/savia_config_patch.cbor", "wb") as f:
+        f.write(cbor2.dumps({"v": 1, "op": "set", "sleep_s": 300, "deep_sleep": True,
+                             "capture_s": 120, "daily_hour": 6, "mock": True, "log_level": 0}))
+    # ingest: timestamped points (mix of air_temperature + soil_moisture w/ depth)
+    with open("/tmp/savia_ingest.cbor", "wb") as f:
+        f.write(cbor2.dumps({"v": 1, "op": "ingest", "data": [
+            {"ts_ms": 1781996400000, "kind": "air_temperature", "value": 22.5},
+            {"ts_ms": 1782000000000, "kind": "air_temperature", "value": 24.1},
+            {"ts_ms": 1782000000000, "kind": "soil_moisture", "value": 0.42, "depth_cm": 30},
+        ]}))
+    print("gen: wrote request / time_sync / weather / config_patch / ingest inputs")
 
 
 def check():
@@ -83,6 +93,42 @@ def check():
     # 6) count
     assert load("count") == {"count": 42}
     print("check: count OK")
+
+    # 7) config snapshot (device card + sleep + schedule + sensors)
+    cfg = load("config")
+    assert set(cfg.keys()) == {"v", "device", "sleep_s", "deep_sleep", "capture_s",
+                               "daily_hour", "mock", "log_level", "wake_gpio", "sensors"}
+    assert cfg["v"] == 1 and cfg["sleep_s"] == 3600 and cfg["wake_gpio"] == 15
+    assert cfg["deep_sleep"] is False   # default OFF
+    assert cfg["capture_s"] == 3600 and cfg["daily_hour"] == 20
+    assert cfg["mock"] is True and cfg["log_level"] == 1   # dev defaults
+    dev = cfg["device"]
+    assert set(dev.keys()) == {"model", "mcu", "img", "fw"}   # liveness lives in status
+    assert dev["model"] == "Raspberry Pi Pico WH" and dev["mcu"] == "RP2040" and dev["img"] == "pico_wh"
+    assert len(cfg["sensors"]) == 1
+    s0 = cfg["sensors"][0]
+    assert s0 == {"port": 1, "gpio": 2, "type": "sdi12_aquacheck", "addr": "0"}
+    print("check: config snapshot OK (device card + schedule + sensors)")
+
+    # 8) config ack
+    ack = load("config_ack")
+    assert ack == {"v": 1, "op": "config_ok", "sleep_s": 300, "deep_sleep": True}
+    print("check: config ack OK")
+
+    # 9) logs (array of text lines)
+    logs = cbor2.loads(open("/tmp/savia_logs.cbor", "rb").read())
+    assert logs == ["boot ok", "BLE: central connected", "sched: daily cycle (hour=20)"]
+    print("check: logs OK")
+
+    # 10) ingest: C parsed the 3 timestamped points back into readings
+    ing = load("ingest_parsed")
+    assert len(ing) == 3
+    assert ing[0]["kind"] == "air_temperature" and ing[0]["ts_ms"] == 1781996400000
+    assert ing[0]["depth_cm"] == 0 and ing[0]["port"] == 1 and abs(ing[0]["value"] - 22.5) < 1e-4
+    assert ing[2]["kind"] == "soil_moisture" and ing[2]["depth_cm"] == 30
+    assert abs(ing[2]["value"] - 0.42) < 1e-4
+    assert load("ingest_ok") == {"v": 1, "op": "ingest_ok", "created": 3, "updated": 1}
+    print("check: ingest OK")
 
     print("CROSSCHECK OK")
 

@@ -14,14 +14,26 @@
 #define SAVIA_CHR_WEATHER_UUID    "5a71a000-0000-0000-0000-000000000012"  // write
 #define SAVIA_CHR_DATA_REQ_UUID   "5a71a000-0000-0000-0000-000000000020"  // write
 #define SAVIA_CHR_DATA_RESP_UUID  "5a71a000-0000-0000-0000-000000000021"  // notify
+#define SAVIA_CHR_CONFIG_UUID     "5a71a000-0000-0000-0000-000000000013"  // read, write, notify
+#define SAVIA_CHR_AUTH_UUID       "5a71a000-0000-0000-0000-000000000014"  // read, write
 #define SAVIA_CHR_BLOB_CTRL_UUID  "5a71a000-0000-0000-0000-000000000030"  // write, notify
 
 // Control-message ops (CBOR field "op"). Match savia/ble/protocol.py.
 #define SAVIA_OP_GET         "get"
 #define SAVIA_OP_COUNT       "count"
+#define SAVIA_OP_CLEAR       "clear"   // wipe stored data (dev)
+#define SAVIA_OP_MOCK        "mock"    // inject one mock reading (dev): kind=hs10|hs30|ta
+#define SAVIA_OP_INGEST      "ingest"     // upsert timestamped points: data:[{ts_ms,kind,value,depth_cm?}]
+#define SAVIA_OP_INGEST_OK   "ingest_ok"  // ack: {created,updated}
 #define SAVIA_OP_INFER       "infer"
 #define SAVIA_OP_INFER_DONE  "infer_done"
 #define SAVIA_OP_SET         "set"
+#define SAVIA_OP_CONFIG_OK   "config_ok"
+#define SAVIA_OP_CONFIG_ERR  "config_err"
+// auth (challenge-response on CHR_AUTH_UUID)
+#define SAVIA_OP_AUTH_SET    "setpw"   // first-time password (unprovisioned only)
+#define SAVIA_OP_AUTH        "auth"    // prove knowledge: mac = SHA256(key||nonce)
+#define SAVIA_OP_AUTH_CHG    "chgpw"   // change password (needs old proof)
 #define SAVIA_OP_CHUNK       "chunk"
 #define SAVIA_OP_BLOB_START  "start"
 #define SAVIA_OP_BLOB_ABORT  "abort"
@@ -33,6 +45,7 @@
 #define SAVIA_KIND_RAW   "raw"   // individual readings
 #define SAVIA_KIND_AGG   "agg"   // hourly aggregates
 #define SAVIA_KIND_PRED  "pred"  // model output (hs30_forecast)
+#define SAVIA_KIND_LOGS  "logs"  // recent firmware log lines (array of text)
 
 // Max bytes for a control message on a single write/notify (above -> chunked).
 #define SAVIA_MAX_CONTROL_MSG_BYTES 512

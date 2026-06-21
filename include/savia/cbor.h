@@ -42,10 +42,14 @@ typedef struct {
 
 void cbor_r_init(cbor_reader_t *r, const uint8_t *buf, size_t len);
 bool cbor_r_map(cbor_reader_t *r, uint64_t *count);     // *count=SAVIA_CBOR_INDEFINITE if indefinite
+bool cbor_r_array(cbor_reader_t *r, uint64_t *count);   // *count=SAVIA_CBOR_INDEFINITE if indefinite
 bool cbor_r_at_break(cbor_reader_t *r);                 // consume a 0xff break; true if present
 bool cbor_r_null(cbor_reader_t *r);                     // consume a 0xf6 null; true if present
+bool cbor_r_bool(cbor_reader_t *r, bool *v);           // consume 0xf5/0xf4; true if a bool was read
 bool cbor_r_text(cbor_reader_t *r, const char **s, size_t *n);  // ptr into buf
+bool cbor_r_bytes(cbor_reader_t *r, const uint8_t **p, size_t *n);  // byte-string, ptr into buf
 bool cbor_r_uint(cbor_reader_t *r, uint64_t *v);
+bool cbor_r_double(cbor_reader_t *r, double *v);   // accepts double/float/uint/negint
 bool cbor_r_skip(cbor_reader_t *r);   // skip any one value (incl. nested)
 
 // Convenience: does the just-read text equal `lit`?

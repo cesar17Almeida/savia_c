@@ -12,9 +12,15 @@
 #include <stddef.h>
 
 void storage_init(void);
+void storage_clear(void);   // wipe all readings + predictions (dev "clear data")
 
 // --- Readings ---
 bool   storage_append_reading(const savia_reading_t *r);
+
+// Upsert by identity (ts_ms, port, kind, depth_cm): if a matching reading exists
+// its value is overwritten and *created=false; otherwise the reading is appended
+// and *created=true. Lets the app push/correct points by timestamp ("ingest").
+bool   storage_upsert_reading(const savia_reading_t *r, bool *created);
 size_t storage_query_raw(uint64_t from_ms, uint64_t to_ms, size_t limit,
                          savia_reading_t *out, size_t out_cap);
 size_t storage_count_raw(uint64_t from_ms, uint64_t to_ms);
@@ -25,6 +31,7 @@ size_t storage_aggregate_hourly(uint64_t from_ms, uint64_t to_ms, size_t limit,
 
 // --- Predictions (empty on Pico WH: inference is off-device) ---
 bool   storage_append_prediction(const savia_prediction_t *p);
+void   storage_clear_predictions(void);   // wipe only predictions (dev: re-mock the forecast)
 size_t storage_query_pred(uint64_t from_ms, uint64_t to_ms, size_t limit,
                           savia_prediction_t *out, size_t out_cap);
 size_t storage_count_pred(uint64_t from_ms, uint64_t to_ms);

@@ -7,8 +7,19 @@ void config_load_defaults(station_config_t *cfg) {
     memset(cfg, 0, sizeof(*cfg));
 
     // Power: 10 min between cycles; button on GPIO15 (to GND, active-low).
-    cfg->sleep_seconds = 600;
+    // Deep sleep is OFF by default -- the device stays awake and discoverable
+    // until the app enables it; only then does it power the radio down to sleep.
+    cfg->sleep_seconds = 3600;     // default nap = 1 h, aligned with hourly capture
     cfg->wake_button_gpio = 15;
+    cfg->deep_sleep_enabled = false;
+
+    // Schedule: capture hourly, daily cycle at 20:00 UTC (overrides a long sleep).
+    cfg->capture_interval_s = 3600;
+    cfg->daily_hour = 20;
+
+    // Dev: mock data ON during bring-up; INFO logs.
+    cfg->mock_enabled = true;
+    cfg->log_level = 1;            // SAVIA_LOG_INFO
 
     // One AquaCheck SDI-12 probe on GPIO2, address '0' (exposes 10 cm + 30 cm).
     cfg->sensors[0].type = SENSOR_SDI12_AQUACHECK;

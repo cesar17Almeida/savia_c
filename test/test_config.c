@@ -10,8 +10,12 @@ int main(void) {
     config_load_defaults(&cfg);
 
     // Power defaults (Pico-era requirements: sleep time + wake button).
-    assert(cfg.sleep_seconds == 600);
+    assert(cfg.sleep_seconds == 3600);   // 1 h, aligned with hourly capture
     assert(cfg.wake_button_gpio == 15);
+    assert(cfg.capture_interval_s == 3600);
+    assert(cfg.daily_hour == 20);
+    assert(cfg.mock_enabled == true);
+    assert(cfg.log_level == 1);
 
     // One AquaCheck SDI-12 sensor on a configurable pin.
     assert(cfg.sensor_count == 1);

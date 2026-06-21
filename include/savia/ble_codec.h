@@ -4,6 +4,8 @@
 #define SAVIA_BLE_CODEC_H
 
 #include "savia/types.h"
+#include "savia/config.h"
+#include "savia/device.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -48,5 +50,66 @@ typedef struct {
 } ble_data_request_t;
 
 bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *out);
+
+// Parse {v, op:"ingest", data:[{ts_ms, kind, value, depth_cm?, port?}]} into
+// readings (out[0..cap)). Returns the count parsed; *ok=false on malformed CBOR
+// or version mismatch. Each point's kind string maps to the reading-kind enum.
+size_t ble_parse_ingest(const uint8_t *buf, size_t len,
+                        savia_reading_t *out, size_t cap, bool *ok);
+
+// Ack for an ingest write (data_response): {v, op:"ingest_ok", created, updated}.
+size_t ble_serialize_ingest_ok(size_t created, size_t updated, uint8_t *out, size_t cap);
+
+// --- config characteristic (0013) -------------------------------------------
+
+// Serialize the config snapshot (config READ): static device identity + settings
+// + sensors[]. Liveness (uptime/last_sync) lives in the `status` characteristic.
+size_t ble_serialize_config(const savia_device_id_t *dev,
+                            const station_config_t *cfg,
+                            uint8_t *out, size_t cap);
+
+// Parsed config patch (config WRITE: {v, op:"set", sleep_s?}). Extend with more
+// fields (wake_gpio, sensors) as the app gains options.
+typedef struct {
+    bool     ok;
+    int      version;
+    char     op[12];
+    bool     has_sleep_s;     uint32_t sleep_s;
+    bool     has_deep_sleep;  bool     deep_sleep;
+    bool     has_capture_s;   uint32_t capture_s;
+    bool     has_daily_hour;  uint8_t  daily_hour;
+    bool     has_mock;        bool     mock;
+    bool     has_log_level;   uint8_t  log_level;
+} ble_config_patch_t;
+
+bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *out);
+
+// Serialize recent log lines as a CBOR array of text strings (served chunked via
+// data_request kind="logs"). lines[] are NUL-terminated, oldest..newest.
+size_t ble_serialize_logs(const char *const *lines, size_t n, uint8_t *out, size_t cap);
+
+// --- auth characteristic (0014) ---------------------------------------------
+
+// READ: {v, prov, authed, nonce:<bytes>}.
+size_t ble_serialize_auth_state(bool prov, bool authed,
+                                const uint8_t *nonce, size_t nonce_len,
+                                uint8_t *out, size_t cap);
+
+// WRITE: {v, op:"setpw"/"auth"/"chgpw", key?, mac?, old_mac?} (32-byte byte-strings).
+typedef struct {
+    bool ok;
+    int  version;
+    char op[12];
+    bool has_key;     uint8_t key[SAVIA_AUTH_KEY_LEN];
+    bool has_mac;     uint8_t mac[SAVIA_AUTH_PROOF_LEN];
+    bool has_old_mac; uint8_t old_mac[SAVIA_AUTH_PROOF_LEN];
+} ble_auth_msg_t;
+
+bool ble_parse_auth(const uint8_t *buf, size_t len, ble_auth_msg_t *out);
+
+// Ack for a config WRITE (config NOTIFY): ok -> {v,op:"config_ok",sleep_s,deep_sleep},
+// else -> {v,op:"config_err",msg}.
+size_t ble_serialize_config_ack(bool ok, uint32_t sleep_s, bool deep_sleep,
+                                const char *err, uint8_t *out, size_t cap);
 
 #endif // SAVIA_BLE_CODEC_H
