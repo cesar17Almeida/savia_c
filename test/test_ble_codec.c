@@ -52,6 +52,18 @@ int main(void) {
     assert(dr2.version == 1 && strcmp(dr2.op, "get") == 0 && strcmp(dr2.kind, "raw") == 0);
     printf("test_ble_codec: indefinite-length data_request parse OK\n");
 
+    // Real TerraLink bytes captured over BLE: {v:1, op:"count", kind:"raw",
+    // from:null, to:null} -- indefinite map + CBOR nulls.
+    static const uint8_t tl_count[] = {
+        0xbf, 0x61,0x76,0x01, 0x62,0x6f,0x70, 0x65,0x63,0x6f,0x75,0x6e,0x74,
+        0x64,0x6b,0x69,0x6e,0x64, 0x63,0x72,0x61,0x77,
+        0x64,0x66,0x72,0x6f,0x6d, 0xf6, 0x62,0x74,0x6f, 0xf6, 0xff };
+    ble_data_request_t dr3;
+    assert(ble_parse_data_request(tl_count, sizeof(tl_count), &dr3));
+    assert(dr3.version == 1 && strcmp(dr3.op, "count") == 0 && strcmp(dr3.kind, "raw") == 0);
+    assert(!dr3.has_from && !dr3.has_to);
+    printf("test_ble_codec: TerraLink count request (null from/to) parse OK\n");
+
     // --- parse time_sync ---
     n = read_file("/tmp/savia_timesync.cbor", in, sizeof(in));
     assert(n > 0);

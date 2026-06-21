@@ -114,6 +114,11 @@ bool cbor_r_at_break(cbor_reader_t *r) {
     return false;
 }
 
+bool cbor_r_null(cbor_reader_t *r) {
+    if (r->pos < r->len && r->buf[r->pos] == 0xf6) { r->pos++; return true; }
+    return false;
+}
+
 bool cbor_r_text(cbor_reader_t *r, const char **s, size_t *n) {
     uint8_t major; uint64_t val;
     if (!r_head(r, &major, &val) || major != 3) { r->err = true; return false; }

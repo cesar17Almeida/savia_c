@@ -89,11 +89,11 @@ bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *
             if (sn >= sizeof(out->kind)) sn = sizeof(out->kind) - 1;
             memcpy(out->kind, s, sn); out->kind[sn] = 0;
         } else if (cbor_text_eq(k, kn, "from")) {
-            if (!cbor_r_uint(&r, &out->from_ms)) return false; out->has_from = true;
+            if (!cbor_r_null(&r)) { if (!cbor_r_uint(&r, &out->from_ms)) return false; out->has_from = true; }
         } else if (cbor_text_eq(k, kn, "to")) {
-            if (!cbor_r_uint(&r, &out->to_ms)) return false; out->has_to = true;
+            if (!cbor_r_null(&r)) { if (!cbor_r_uint(&r, &out->to_ms)) return false; out->has_to = true; }
         } else if (cbor_text_eq(k, kn, "limit")) {
-            if (!cbor_r_uint(&r, &out->limit)) return false; out->has_limit = true;
+            if (!cbor_r_null(&r)) { if (!cbor_r_uint(&r, &out->limit)) return false; out->has_limit = true; }
         } else {
             if (!cbor_r_skip(&r)) return false;
         }
