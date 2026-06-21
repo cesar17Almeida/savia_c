@@ -16,6 +16,22 @@
 #include "savia/lora.h"
 #include "savia/inference.h"
 
+// Dev/mock: seed ~24 h of hourly readings (10 & 30 cm) at boot so the app has a
+// dataset to download before live sampling accumulates. Remove with the real sensor.
+static void seed_mock_readings(void) {
+    const uint64_t base = 1718900000000ULL;   // hardcoded recent epoch ms (mock)
+    for (int h = 24; h >= 1; h--) {
+        uint64_t ts = base - (uint64_t) h * 3600000ULL;
+        float drift = (float) h * 0.002f;       // older = slightly wetter (dry-down)
+        savia_reading_t r10 = { .ts_ms = ts, .port = 1, .depth_cm = 10,
+                                .kind = READING_SOIL_MOISTURE, .value = 0.70f + drift };
+        savia_reading_t r30 = { .ts_ms = ts, .port = 1, .depth_cm = 30,
+                                .kind = READING_SOIL_MOISTURE, .value = 0.74f + drift };
+        storage_append_reading(&r10);
+        storage_append_reading(&r30);
+    }
+}
+
 int main(void) {
     stdio_init_all();
 
@@ -25,6 +41,7 @@ int main(void) {
     power_init(&cfg);
     sensor_init(&cfg);
     storage_init();
+    seed_mock_readings();   // dev: give the app a dataset to download right away
     ble_init(&cfg);
     if (cfg.lora_enabled) {
         lora_init(&cfg);
