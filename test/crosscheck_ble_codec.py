@@ -104,8 +104,8 @@ def check():
     assert cfg["capture_s"] == 3600 and cfg["daily_hour"] == 20
     assert cfg["mock"] is True and cfg["log_level"] == 1   # dev defaults
     dev = cfg["device"]
-    assert set(dev.keys()) == {"model", "mcu", "img", "fw"}   # liveness lives in status
-    assert dev["model"] == "Raspberry Pi Pico WH" and dev["mcu"] == "RP2040" and dev["img"] == "pico_wh"
+    assert set(dev.keys()) == {"model", "mcu", "fw"}   # liveness lives in status; app maps image by model
+    assert dev["model"] == "Raspberry Pi Pico WH" and dev["mcu"] == "RP2040"
     assert len(cfg["sensors"]) == 1
     s0 = cfg["sensors"][0]
     assert s0 == {"port": 1, "gpio": 2, "type": "sdi12_aquacheck", "addr": "0"}

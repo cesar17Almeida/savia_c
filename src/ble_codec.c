@@ -329,10 +329,9 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
 
     // device: static identity (uptime/last_sync are in the status characteristic).
     cbor_w_textz(&w, "device");
-    cbor_w_map(&w, 4);
+    cbor_w_map(&w, 3);
     cbor_w_textz(&w, "model"); cbor_w_textz(&w, dev->model);
     cbor_w_textz(&w, "mcu");   cbor_w_textz(&w, dev->mcu);
-    cbor_w_textz(&w, "img");   cbor_w_textz(&w, dev->img);
     cbor_w_textz(&w, "fw");    cbor_w_textz(&w, dev->fw);
 
     cbor_w_textz(&w, "name");       cbor_w_textz(&w, cfg->ble_name);

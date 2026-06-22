@@ -177,7 +177,7 @@ int main(void) {
     station_config_t cfg;
     config_load_defaults(&cfg);
     savia_device_id_t dev = { .model = "Raspberry Pi Pico WH", .mcu = "RP2040",
-                              .img = "pico_wh", .fw = "0.1.0-c" };
+                              .fw = "0.1.0-c" };
     l = ble_serialize_config(&dev, &cfg, buf, sizeof(buf));
     assert(l > 0);
     write_file("/tmp/savia_config.cbor", buf, l);
