@@ -38,22 +38,28 @@ pico_sdk_init()
 # --- Ejecutable -------------------------------------------------------------
 add_executable(savia_c
   src/main.c
-  src/config.c
-  src/config_store.c
-  src/device.c
-  src/power.c
-  src/scheduler.c
-  src/clock.c
-  src/sensor_sdi12.c
-  src/storage_flash.c
-  src/cbor.c
-  src/sha256.c
-  src/auth.c
-  src/ble_codec.c
-  src/ble_gatt.c
-  src/log.c
-  src/lora_wioe5.c
-  src/inference.c
+  # system: app lifecycle, config + persistence, identity, clock, logging, ML hook
+  src/system/config.c
+  src/system/config_store.c
+  src/system/device.c
+  src/system/clock.c
+  src/system/log.c
+  src/system/inference.c
+  # power: deep sleep + schedule
+  src/power/power.c
+  src/power/scheduler.c
+  # drivers: hardware peripherals
+  src/drivers/sensor_sdi12.c
+  src/drivers/lora_wioe5.c
+  # storage: flash-backed ring
+  src/storage/storage_flash.c
+  # codec: reusable encoders (also linked by the host tests)
+  src/codec/cbor.c
+  src/codec/sha256.c
+  # ble: peripheral, wire codec, auth
+  src/ble/auth.c
+  src/ble/ble_codec.c
+  src/ble/ble_gatt.c
 )
 
 target_include_directories(savia_c PRIVATE include)
@@ -92,7 +98,7 @@ if(SAVIA_ENABLE_BLE)
   # CYW43_LWIP=0: BLE-only, sin WiFi/lwIP (evita el include de lwip/netif.h).
   target_compile_definitions(savia_c PRIVATE SAVIA_ENABLE_BLE=1 CYW43_LWIP=0)
   # Genera el ATT DB (savia_ble.h) desde el .gatt (mismo contrato que savia_py).
-  pico_btstack_make_gatt_header(savia_c PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src/savia_ble.gatt)
+  pico_btstack_make_gatt_header(savia_c PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src/ble/savia_ble.gatt)
   target_link_libraries(savia_c
     pico_cyw43_arch_threadsafe_background   # BLE corre en background; el supervisor sigue
     pico_btstack_ble                        # GATT server

@@ -10,22 +10,22 @@ CC="${CC:-cc}"
 CFLAGS="-std=c11 -Wall -Wextra -Iinclude"
 
 echo "== 1) config test =="
-"$CC" $CFLAGS test/test_config.c src/config.c -o /tmp/savia_test_config
+"$CC" $CFLAGS test/test_config.c src/system/config.c -o /tmp/savia_test_config
 /tmp/savia_test_config
 
 echo ""
 echo "== 2) storage + clock test =="
-"$CC" $CFLAGS test/test_storage.c src/storage_flash.c src/clock.c -o /tmp/savia_test_storage
+"$CC" $CFLAGS test/test_storage.c src/storage/storage_flash.c src/system/clock.c -o /tmp/savia_test_storage
 /tmp/savia_test_storage
 
 echo ""
 echo "== 2b) scheduler test =="
-"$CC" $CFLAGS test/test_scheduler.c src/scheduler.c -o /tmp/savia_test_sched
+"$CC" $CFLAGS test/test_scheduler.c src/power/scheduler.c -o /tmp/savia_test_sched
 /tmp/savia_test_sched
 
 echo ""
 echo "== 2c) sha256 + auth test =="
-"$CC" $CFLAGS test/test_auth.c src/sha256.c src/auth.c -o /tmp/savia_test_auth
+"$CC" $CFLAGS test/test_auth.c src/codec/sha256.c src/ble/auth.c -o /tmp/savia_test_auth
 /tmp/savia_test_auth
 
 echo ""
@@ -35,7 +35,7 @@ if [ ! -x "$PYTHON" ]; then
   echo "  !! falta $PYTHON (venv de savia_py con cbor2); salto el cross-check"
 else
   "$PYTHON" test/crosscheck_ble_codec.py gen
-  "$CC" $CFLAGS test/test_ble_codec.c src/ble_codec.c src/cbor.c src/config.c -o /tmp/savia_test_ble
+  "$CC" $CFLAGS test/test_ble_codec.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c -o /tmp/savia_test_ble
   /tmp/savia_test_ble
   "$PYTHON" test/crosscheck_ble_codec.py check
 fi
