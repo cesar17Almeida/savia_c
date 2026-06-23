@@ -7,6 +7,7 @@
 #define SAVIA_LOG_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define SAVIA_LOG_DEBUG 0
 #define SAVIA_LOG_INFO  1
@@ -24,6 +25,11 @@ void savia_log_set_level(int level);
 // Implemented in log.c: printf to serial + append to the ring buffer.
 void savia_log_write(const char *fmt, ...);
 void savia_log_hexdump(const char *label, const uint8_t *buf, unsigned len);
+
+// Optional time source for log line timestamps, wired from main once the clock
+// + SDK uptime exist (log.c stays SDK-free without it). now_ms() returns ms;
+// *wall=true => epoch ms (shown HH:MM:SS UTC), false => ms-since-boot (shown +Ns).
+void savia_log_set_clock(uint64_t (*now_ms)(bool *wall));
 
 #define LOG_DEBUG(...) do { if (savia_log_level <= SAVIA_LOG_DEBUG) savia_log_write(__VA_ARGS__); } while (0)
 #define LOG_INFO(...)  do { if (savia_log_level <= SAVIA_LOG_INFO)  savia_log_write(__VA_ARGS__); } while (0)

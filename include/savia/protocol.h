@@ -16,6 +16,7 @@
 #define SAVIA_CHR_DATA_RESP_UUID  "5a71a000-0000-0000-0000-000000000021"  // notify
 #define SAVIA_CHR_CONFIG_UUID     "5a71a000-0000-0000-0000-000000000013"  // read, write, notify
 #define SAVIA_CHR_AUTH_UUID       "5a71a000-0000-0000-0000-000000000014"  // read, write
+#define SAVIA_CHR_PINMAP_UUID     "5a71a000-0000-0000-0000-000000000015"  // read (GPIO inventory)
 #define SAVIA_CHR_BLOB_CTRL_UUID  "5a71a000-0000-0000-0000-000000000030"  // write, notify
 
 // Control-message ops (CBOR field "op"). Match savia/ble/protocol.py.

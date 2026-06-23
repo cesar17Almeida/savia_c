@@ -85,6 +85,14 @@ typedef struct {
 
 bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *out);
 
+// --- pinmap characteristic (0015) -------------------------------------------
+
+// Serialize the GPIO inventory (pinmap READ): {v, pins:[{gpio, state, reason,
+// caps, port?}]}. state = free/in_use/reserved; reason names the system owner;
+// caps is a savia_pin_cap_t bitmask. The app uses it to offer only assignable
+// pins; config writes are validated server-side via pinmap_check_assign().
+size_t ble_serialize_pinmap(const station_config_t *cfg, uint8_t *out, size_t cap);
+
 // Serialize recent log lines as a CBOR array of text strings (served chunked via
 // data_request kind="logs"). lines[] are NUL-terminated, oldest..newest.
 size_t ble_serialize_logs(const char *const *lines, size_t n, uint8_t *out, size_t cap);

@@ -25,6 +25,9 @@ CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000013, READ | WRITE | NOTIFY | DY
 CLIENT_CHARACTERISTIC_CONFIGURATION,
 // auth (0014): read = {v, prov, authed, nonce}; write = {op:"setpw"/"auth"/"chgpw", ...}.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000014, READ | WRITE | DYNAMIC,
+// pinmap (0015): read = {v, pins:[{gpio, state, reason, caps, port?}]} -- GPIO
+// inventory so the app offers only assignable pins (free / not system-reserved).
+CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000015, READ | DYNAMIC,
 // data_request (0020): {v, op:"get"/"count", kind, from?, to?, limit?} -- write.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000020, WRITE | DYNAMIC,
 // data_response (0021): {v, op:"chunk", s, t, eof, p} -- notify (chunked).

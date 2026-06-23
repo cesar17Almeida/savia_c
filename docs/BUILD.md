@@ -23,27 +23,29 @@ cambia es la combinación `PICO_BOARD` + `SAVIA_ON_DEVICE_INFERENCE`.
 
 ## Comandos
 
+> ⚠️ **`SAVIA_ENABLE_BLE` está OFF por defecto.** Para un firmware que la app pueda
+> ver hay que añadir **`-DSAVIA_ENABLE_BLE=ON`** (enlaza BTstack + CYW43 y genera el
+> ATT DB). Sin él el build es mínimo y arranca sin BLE.
+
 ### Pico WH (RP2040) — inferencia off-device
 
 ```sh
-mkdir -p build-pico_w && cd build-pico_w
-cmake -G Ninja \
+cmake -S . -B build-pico_w -G Ninja \
   -DPICO_BOARD=pico_w \
-  -DSAVIA_ON_DEVICE_INFERENCE=OFF \
-  ..
-ninja
+  -DSAVIA_ENABLE_BLE=ON \
+  -DSAVIA_ON_DEVICE_INFERENCE=OFF
+ninja -C build-pico_w
 # -> build-pico_w/savia_c-pico_w-mloffdevice.uf2
 ```
 
 ### Pico 2 W (RP2350) — inferencia on-device
 
 ```sh
-mkdir -p build-pico2_w && cd build-pico2_w
-cmake -G Ninja \
+cmake -S . -B build-pico2_w -G Ninja \
   -DPICO_BOARD=pico2_w \
-  -DSAVIA_ON_DEVICE_INFERENCE=ON \
-  ..
-ninja
+  -DSAVIA_ENABLE_BLE=ON \
+  -DSAVIA_ON_DEVICE_INFERENCE=ON
+ninja -C build-pico2_w
 # -> build-pico2_w/savia_c-pico2_w-mlondevice.uf2
 ```
 

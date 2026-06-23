@@ -1,6 +1,7 @@
 #include "savia/ble_codec.h"
 #include "savia/cbor.h"
 #include "savia/protocol.h"
+#include "savia/pinmap.h"
 #include <string.h>
 
 static const char *kind_str(uint8_t kind) {
@@ -356,6 +357,47 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
         cbor_w_textz(&w, "addr"); cbor_w_textz(&w, addr);
     }
 
+    return w.overflow ? 0 : w.len;
+}
+
+// --- pinmap characteristic (0015) -------------------------------------------
+
+static const char *pin_state_str(uint8_t s) {
+    switch (s) {
+        case SAVIA_PIN_IN_USE:   return "in_use";
+        case SAVIA_PIN_RESERVED: return "reserved";
+        default:                 return "free";
+    }
+}
+
+static const char *pin_reason_str(uint8_t r) {
+    switch (r) {
+        case SAVIA_PIN_REASON_SENSOR:    return "sensor";
+        case SAVIA_PIN_REASON_WIRELESS:  return "wireless";
+        case SAVIA_PIN_REASON_WAKE_BTN:  return "wake_btn";
+        case SAVIA_PIN_REASON_LORA_UART: return "lora_uart";
+        default:                         return "";
+    }
+}
+
+size_t ble_serialize_pinmap(const station_config_t *cfg, uint8_t *out, size_t cap) {
+    savia_pin_info_t pins[SAVIA_GPIO_COUNT];
+    pinmap_build(cfg, pins);
+
+    cbor_writer_t w;
+    cbor_w_init(&w, out, cap);
+    cbor_w_map(&w, 2);
+    cbor_w_textz(&w, "v");    cbor_w_uint(&w, SAVIA_PROTOCOL_VERSION);
+    cbor_w_textz(&w, "pins"); cbor_w_array(&w, SAVIA_GPIO_COUNT);
+    for (uint8_t g = 0; g < SAVIA_GPIO_COUNT; g++) {
+        bool is_sensor = pins[g].reason == SAVIA_PIN_REASON_SENSOR;
+        cbor_w_map(&w, is_sensor ? 5 : 4);   // +port only when a sensor lives here
+        cbor_w_textz(&w, "gpio");   cbor_w_uint(&w, pins[g].gpio);
+        cbor_w_textz(&w, "state");  cbor_w_textz(&w, pin_state_str(pins[g].state));
+        cbor_w_textz(&w, "reason"); cbor_w_textz(&w, pin_reason_str(pins[g].reason));
+        cbor_w_textz(&w, "caps");   cbor_w_uint(&w, pins[g].caps);   // savia_pin_cap_t bits
+        if (is_sensor) { cbor_w_textz(&w, "port"); cbor_w_uint(&w, pins[g].port); }
+    }
     return w.overflow ? 0 : w.len;
 }
 

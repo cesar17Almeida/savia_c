@@ -28,10 +28,10 @@ set(CMAKE_CXX_STANDARD 17)
 # la hace la app móvil con el pronóstico que servimos por BLE.
 option(SAVIA_ON_DEVICE_INFERENCE "Run the LSTM on-device (needs RP2350 RAM/FPU)" OFF)
 
-# El stack BLE (BTstack + CYW43) se enlaza solo cuando el módulo BLE esté
-# implementado. En el scaffold se deja OFF para que el primer build sea mínimo
-# y arranque seguro. Se activa con -DSAVIA_ENABLE_BLE=ON.
-option(SAVIA_ENABLE_BLE "Link the BLE stack (BTstack + CYW43)" OFF)
+# El stack BLE (BTstack + CYW43) se enlaza por defecto: la app lo necesita para
+# conectar. Se puede desactivar con -DSAVIA_ENABLE_BLE=OFF para un build mínimo
+# sin radio (bring-up / pruebas de lógica en placa).
+option(SAVIA_ENABLE_BLE "Link the BLE stack (BTstack + CYW43)" ON)
 
 pico_sdk_init()
 
@@ -41,10 +41,12 @@ add_executable(savia_c
   # system: app lifecycle, config + persistence, identity, clock, logging, ML hook
   src/system/config.c
   src/system/config_store.c
+  src/system/pinmap.c
   src/system/device.c
   src/system/clock.c
   src/system/log.c
   src/system/inference.c
+  src/system/weather.c       # TA forecast cache (LoRa downlink -> LSTM input)
   # power: deep sleep + schedule
   src/power/power.c
   src/power/scheduler.c
@@ -56,6 +58,7 @@ add_executable(savia_c
   # codec: reusable encoders (also linked by the host tests)
   src/codec/cbor.c
   src/codec/sha256.c
+  src/codec/lora_codec.c     # LoRaWAN node payloads (downlink TA/clock, uplink)
   # ble: peripheral, wire codec, auth
   src/ble/auth.c
   src/ble/ble_codec.c

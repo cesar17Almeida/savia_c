@@ -101,7 +101,7 @@ int main(void) {
     assert(cp2.has_deep_sleep && cp2.deep_sleep == true);
     printf("test_ble_codec: indefinite-length config patch parse OK\n");
 
-    uint8_t buf[512];
+    uint8_t buf[2048];
     size_t l;
 
     // --- parse ingest (timestamped upsert points from cbor2) ---
@@ -184,6 +184,11 @@ int main(void) {
     l = ble_serialize_config_ack(true, 300, true, NULL, buf, sizeof(buf));
     assert(l > 0);
     write_file("/tmp/savia_config_ack.cbor", buf, l);
+
+    // --- pinmap snapshot (GPIO inventory: free / in_use / reserved + caps) ---
+    l = ble_serialize_pinmap(&cfg, buf, sizeof(buf));
+    assert(l > 0);
+    write_file("/tmp/savia_pinmap.cbor", buf, l);
 
     // --- logs (array of text lines, served chunked via kind="logs") ---
     const char *loglines[3] = { "boot ok", "BLE: central connected",

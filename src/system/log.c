@@ -15,13 +15,44 @@ static unsigned s_count;    // lines retained (<= LOG_RING_LINES)
 int savia_log_level = SAVIA_LOG_LEVEL;   // runtime level, seeded from the build default
 void savia_log_set_level(int level) { savia_log_level = level; }
 
+// Optional clock source (set from main). Without it, lines carry no timestamp.
+static uint64_t (*s_clock)(bool *wall) = NULL;
+void savia_log_set_clock(uint64_t (*now_ms)(bool *wall)) { s_clock = now_ms; }
+
+// Render the per-line timestamp prefix into `out`; returns its length (0 if no
+// clock). HH:MM:SS once the wall clock is synced, else +Ns since boot.
+static int stamp_prefix(char *out, size_t cap) {
+    if (!s_clock) return 0;
+    bool wall = false;
+    uint64_t ms = s_clock(&wall);
+    int n;
+    if (wall) {
+        uint64_t s = ms / 1000;
+        n = snprintf(out, cap, "%02u:%02u:%02u ",
+                     (unsigned)((s / 3600) % 24), (unsigned)((s / 60) % 60), (unsigned)(s % 60));
+    } else {
+        n = snprintf(out, cap, "+%lus ", (unsigned long)(ms / 1000));
+    }
+    return n > 0 ? n : 0;
+}
+
 static void ring_push(const char *line) {
     size_t n = strlen(line);
     while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) n--;  // strip EOL
-    if (n > LOG_LINE_LEN - 1) n = LOG_LINE_LEN - 1;
     char *dst = s_ring[s_head];
-    memcpy(dst, line, n);
-    dst[n] = '\0';
+
+    char ts[16];
+    int tn = stamp_prefix(ts, sizeof(ts));
+    size_t pos = 0;
+    if (tn > 0 && (size_t) tn < LOG_LINE_LEN - 1) {
+        memcpy(dst, ts, (size_t) tn);
+        pos = (size_t) tn;
+    }
+    size_t avail = LOG_LINE_LEN - 1 - pos;
+    if (n > avail) n = avail;
+    memcpy(dst + pos, line, n);
+    dst[pos + n] = '\0';
+
     s_head = (s_head + 1) % LOG_RING_LINES;
     if (s_count < LOG_RING_LINES) s_count++;
 }

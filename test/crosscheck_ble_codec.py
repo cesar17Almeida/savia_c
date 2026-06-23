@@ -131,6 +131,20 @@ def check():
     assert load("ingest_ok") == {"v": 1, "op": "ingest_ok", "created": 3, "updated": 1}
     print("check: ingest OK")
 
+    # 11) pinmap snapshot (GPIO inventory: free / in_use / reserved + caps bitmask)
+    pm = load("pinmap")
+    assert set(pm.keys()) == {"v", "pins"}
+    assert pm["v"] == 1 and len(pm["pins"]) == 30
+    by = {p["gpio"]: p for p in pm["pins"]}
+    assert by[2]["state"] == "in_use" and by[2]["reason"] == "sensor" and by[2]["port"] == 1
+    assert by[15]["state"] == "reserved" and by[15]["reason"] == "wake_btn"
+    assert by[23]["state"] == "reserved" and by[23]["reason"] == "wireless"
+    assert by[29]["reason"] == "wireless"
+    assert by[6]["state"] == "free" and by[6]["reason"] == ""
+    assert "port" not in by[6] and "port" in by[2]   # port only on sensor pins
+    assert by[26]["caps"] & 0x08 and not (by[0]["caps"] & 0x08)   # ADC (bit 3) only on GP26..28
+    print("check: pinmap OK (GPIO inventory: free/in_use/reserved + caps)")
+
     print("CROSSCHECK OK")
 
 

@@ -37,8 +37,17 @@ static void seed_mock_readings(void) {
     }
 }
 
+// Time source for log line stamps: wall-clock once synced, uptime before that.
+static uint64_t log_clock(bool *wall) {
+    uint64_t up = to_ms_since_boot(get_absolute_time());
+    if (clock_is_set()) { *wall = true; return clock_now(up); }
+    *wall = false;
+    return up;
+}
+
 int main(void) {
     stdio_init_all();
+    savia_log_set_clock(log_clock);   // timestamp every log line
 
     station_config_t cfg;
     config_load_defaults(&cfg);

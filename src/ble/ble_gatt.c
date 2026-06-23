@@ -40,6 +40,7 @@
 #define H_CONFIG        ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000013_01_VALUE_HANDLE
 #define H_CONFIG_CCC    ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000013_01_CLIENT_CONFIGURATION_HANDLE
 #define H_AUTH          ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000014_01_VALUE_HANDLE
+#define H_PINMAP        ATT_CHARACTERISTIC_5A71A000_0000_0000_0000_000000000015_01_VALUE_HANDLE
 
 #define APP_AD_FLAGS 0x06
 
@@ -369,6 +370,11 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
         bool prov = g_cfg && auth_key_is_set(g_cfg->auth_key);
         size_t n = ble_serialize_auth_state(prov, g_authed, g_nonce, SAVIA_AUTH_NONCE_LEN,
                                             tmp, sizeof(tmp));
+        return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
+    }
+    if (att_handle == H_PINMAP) {
+        static uint8_t tmp[2048];   // GPIO inventory: 30 pins, ~1.1 KB measured
+        size_t n = ble_serialize_pinmap(g_cfg, tmp, sizeof(tmp));
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
     }
     return 0;
