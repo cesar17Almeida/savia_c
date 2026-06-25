@@ -196,7 +196,12 @@ bool cbor_r_double(cbor_reader_t *r, double *v) {
     return false;
 }
 
-bool cbor_r_skip(cbor_reader_t *r) {
+// Bound recursion: covers the deepest real message (config patch
+// sensors[] -> slot map -> chan[] -> channel map ~= 4 levels).
+#define CBOR_MAX_DEPTH 8
+
+static bool cbor_r_skip_depth(cbor_reader_t *r, unsigned depth) {
+    if (depth > CBOR_MAX_DEPTH) { r->err = true; return false; }
     if (r->err || r->pos >= r->len) { r->err = true; return false; }
     uint8_t ib = r->buf[r->pos];
     // Indefinite-length bytes(0x5f)/text(0x7f)/array(0x9f)/map(0xbf): skip items
@@ -205,7 +210,7 @@ bool cbor_r_skip(cbor_reader_t *r) {
         r->pos++;
         while (!cbor_r_at_break(r)) {
             if (r->err || r->pos >= r->len) { r->err = true; return false; }
-            if (!cbor_r_skip(r)) return false;
+            if (!cbor_r_skip_depth(r, depth + 1)) return false;
         }
         return true;
     }
@@ -219,16 +224,18 @@ bool cbor_r_skip(cbor_reader_t *r) {
             r->pos += val;
             return true;
         case 4:                        // array: skip `val` items
-            for (uint64_t i = 0; i < val; i++) if (!cbor_r_skip(r)) return false;
+            for (uint64_t i = 0; i < val; i++) if (!cbor_r_skip_depth(r, depth + 1)) return false;
             return true;
         case 5:                        // map: skip `val` key+value pairs
-            for (uint64_t i = 0; i < 2 * val; i++) if (!cbor_r_skip(r)) return false;
+            for (uint64_t i = 0; i < 2 * val; i++) if (!cbor_r_skip_depth(r, depth + 1)) return false;
             return true;
         default:
             r->err = true;
             return false;
     }
 }
+
+bool cbor_r_skip(cbor_reader_t *r) { return cbor_r_skip_depth(r, 0); }
 
 bool cbor_text_eq(const char *s, size_t n, const char *lit) {
     return strlen(lit) == n && memcmp(s, lit, n) == 0;
