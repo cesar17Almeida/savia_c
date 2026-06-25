@@ -104,12 +104,31 @@ bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *
             if (!cbor_r_null(&r)) { if (!cbor_r_uint(&r, &out->to_ms)) return false; out->has_to = true; }
         } else if (cbor_text_eq(k, kn, "limit")) {
             if (!cbor_r_null(&r)) { if (!cbor_r_uint(&r, &out->limit)) return false; out->has_limit = true; }
+        } else if (cbor_text_eq(k, kn, "cmd")) {
+            if (!cbor_r_null(&r)) {
+                const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
+                if (sn >= sizeof(out->cmd)) sn = sizeof(out->cmd) - 1;
+                memcpy(out->cmd, s, sn); out->cmd[sn] = 0; out->has_cmd = true;
+            }
         } else {
             if (!cbor_r_skip(&r)) return false;
         }
     }
     out->ok = !r.err;
     return out->ok;
+}
+
+size_t ble_serialize_at_result(const lora_at_result_t *r, uint8_t *out, size_t cap) {
+    cbor_writer_t w;
+    cbor_w_init(&w, out, cap);
+    cbor_w_map(&w, 3);
+    cbor_w_textz(&w, "seq"); cbor_w_uint(&w, r->seq);
+    cbor_w_textz(&w, "cmd"); cbor_w_textz(&w, r->cmd);
+    cbor_w_textz(&w, "lines");
+    uint8_t n = r->count <= LORA_AT_MAX_LINES ? r->count : LORA_AT_MAX_LINES;
+    cbor_w_array(&w, n);
+    for (uint8_t i = 0; i < n; i++) cbor_w_textz(&w, r->lines[i]);
+    return w.overflow ? 0 : w.len;
 }
 
 // Parse one {ts_ms, kind, value, depth_cm?, port?} map into *rd. Returns true if
@@ -235,10 +254,11 @@ size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
 }
 
 size_t ble_serialize_status(uint32_t uptime_s, uint64_t last_sync_ms,
-                            uint64_t weather_updated_ms, uint8_t *out, size_t cap) {
+                            uint64_t weather_updated_ms, const lora_status_t *lora,
+                            uint8_t *out, size_t cap) {
     cbor_writer_t w;
     cbor_w_init(&w, out, cap);
-    cbor_w_map(&w, 5);
+    cbor_w_map(&w, 6);
     cbor_w_textz(&w, "v");        cbor_w_uint(&w, SAVIA_PROTOCOL_VERSION);
     cbor_w_textz(&w, "fw");       cbor_w_textz(&w, SAVIA_FW_VERSION);
     cbor_w_textz(&w, "uptime_s"); cbor_w_uint(&w, uptime_s);
@@ -246,6 +266,21 @@ size_t ble_serialize_status(uint32_t uptime_s, uint64_t last_sync_ms,
     if (last_sync_ms) cbor_w_uint(&w, last_sync_ms); else cbor_w_null(&w);
     cbor_w_textz(&w, "weather_updated_ms");
     if (weather_updated_ms) cbor_w_uint(&w, weather_updated_ms); else cbor_w_null(&w);
+
+    // LoRa link: joined proves a TTN gateway relayed the OTAA handshake; rssi/snr
+    // are the downlink signal from the last uplink ACK (null until first measured).
+    bool sig = lora && lora->has_signal;
+    cbor_w_textz(&w, "lora");
+    cbor_w_map(&w, 7);
+    cbor_w_textz(&w, "inited"); cbor_w_bool(&w, lora && lora->inited);   // module replied to AT
+    cbor_w_textz(&w, "joined"); cbor_w_bool(&w, lora && lora->joined);
+    cbor_w_textz(&w, "rssi");   if (sig) cbor_w_int(&w, lora->rssi_dbm); else cbor_w_null(&w);
+    cbor_w_textz(&w, "snr");    if (sig) cbor_w_double(&w, lora->snr_ddb / 10.0); else cbor_w_null(&w);
+    cbor_w_textz(&w, "last_ms");
+    if (lora && lora->last_signal_ms) cbor_w_uint(&w, lora->last_signal_ms); else cbor_w_null(&w);
+    cbor_w_textz(&w, "module"); cbor_w_textz(&w, lora ? lora->module : "");  // AT+VER reply
+    cbor_w_textz(&w, "seq");    cbor_w_uint(&w, lora ? lora->seq : 0);
+
     return w.overflow ? 0 : w.len;
 }
 
@@ -313,10 +348,20 @@ bool ble_parse_weather(const uint8_t *buf, size_t len) {
 
 static const char *sensor_type_str(savia_sensor_type_t t) {
     switch (t) {
-        case SENSOR_SDI12_AQUACHECK: return "sdi12_aquacheck";
-        case SENSOR_SDI12_GENERIC:   return "sdi12_generic";
-        default:                     return "none";
+        case SENSOR_SDI12_AQUACHECK:  return "sdi12_aquacheck";
+        case SENSOR_SDI12_GENERIC:    return "sdi12_generic";
+        case SENSOR_ANALOG_LINEAR:    return "analog_linear";
+        case SENSOR_ONEWIRE_DS18B20:  return "onewire_ds18b20";
+        default:                      return "none";
     }
+}
+
+static savia_sensor_type_t sensor_type_from_str(const char *s, size_t n) {
+    if (cbor_text_eq(s, n, "sdi12_aquacheck")) return SENSOR_SDI12_AQUACHECK;
+    if (cbor_text_eq(s, n, "sdi12_generic"))   return SENSOR_SDI12_GENERIC;
+    if (cbor_text_eq(s, n, "analog_linear"))   return SENSOR_ANALOG_LINEAR;
+    if (cbor_text_eq(s, n, "onewire_ds18b20")) return SENSOR_ONEWIRE_DS18B20;
+    return SENSOR_NONE;
 }
 
 size_t ble_serialize_config(const savia_device_id_t *dev,
@@ -344,17 +389,48 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
     cbor_w_textz(&w, "log_level");  cbor_w_uint(&w, cfg->log_level);
     cbor_w_textz(&w, "wake_gpio");  cbor_w_uint(&w, cfg->wake_button_gpio);
 
-    // sensors: one entry per configured slot.
+    // sensors: one entry per configured slot. AquaCheck stays {port,gpio,type,addr}
+    // (fixed layout); the other types also carry the installer-supplied decoding so
+    // the app can show it and re-send it unchanged: analog -> kind/depth/scale/offset,
+    // 1-Wire -> kind/depth, SDI-12 generic -> chan[] of {kind,depth}.
     uint8_t nsens = cfg->sensor_count <= SAVIA_MAX_SENSORS ? cfg->sensor_count : SAVIA_MAX_SENSORS;
     cbor_w_textz(&w, "sensors");
     cbor_w_array(&w, nsens);
     for (uint8_t i = 0; i < nsens; i++) {
-        cbor_w_map(&w, 4);
+        const savia_sensor_slot_t *s = &cfg->sensors[i];
+        bool is_analog  = s->type == SENSOR_ANALOG_LINEAR;
+        bool is_1wire   = s->type == SENSOR_ONEWIRE_DS18B20;
+        bool is_generic = s->type == SENSOR_SDI12_GENERIC;
+        uint8_t fields = 4;                          // port, gpio, type, addr
+        if (is_analog || is_1wire) fields += 2;      // kind, depth_cm
+        if (is_analog)  fields += 2;                 // scale, offset
+        if (is_generic) fields += 1;                 // chan
+
+        cbor_w_map(&w, fields);
         cbor_w_textz(&w, "port"); cbor_w_uint(&w, (uint64_t)(i + 1));
-        cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, cfg->sensors[i].gpio);
-        cbor_w_textz(&w, "type"); cbor_w_textz(&w, sensor_type_str(cfg->sensors[i].type));
-        char addr[2] = { cfg->sensors[i].address, 0 };
+        cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, s->gpio);
+        cbor_w_textz(&w, "type"); cbor_w_textz(&w, sensor_type_str(s->type));
+        char addr[2] = { s->address, 0 };
         cbor_w_textz(&w, "addr"); cbor_w_textz(&w, addr);
+        if (is_analog || is_1wire) {
+            cbor_w_textz(&w, "kind");     cbor_w_textz(&w, kind_str(s->kind));
+            cbor_w_textz(&w, "depth_cm"); cbor_w_uint(&w, s->depth_cm);
+        }
+        if (is_analog) {
+            cbor_w_textz(&w, "scale");  cbor_w_double(&w, (double) s->map.analog.scale);
+            cbor_w_textz(&w, "offset"); cbor_w_double(&w, (double) s->map.analog.offset);
+        }
+        if (is_generic) {
+            uint8_t cc = s->map.sdi12.count <= SAVIA_SDI12_MAX_CHANNELS
+                       ? s->map.sdi12.count : SAVIA_SDI12_MAX_CHANNELS;
+            cbor_w_textz(&w, "chan");
+            cbor_w_array(&w, cc);
+            for (uint8_t c = 0; c < cc; c++) {
+                cbor_w_map(&w, 2);
+                cbor_w_textz(&w, "kind");     cbor_w_textz(&w, kind_str(s->map.sdi12.ch[c].kind));
+                cbor_w_textz(&w, "depth_cm"); cbor_w_uint(&w, s->map.sdi12.ch[c].depth_cm);
+            }
+        }
     }
 
     return w.overflow ? 0 : w.len;
@@ -399,6 +475,86 @@ size_t ble_serialize_pinmap(const station_config_t *cfg, uint8_t *out, size_t ca
         if (is_sensor) { cbor_w_textz(&w, "port"); cbor_w_uint(&w, pins[g].port); }
     }
     return w.overflow ? 0 : w.len;
+}
+
+// Parse one sensor entry {gpio, type, addr?, kind?, depth_cm?, scale?, offset?,
+// chan?:[{kind,depth_cm}]} into *slot. "port" and unknown keys are skipped. An
+// unknown type string yields SENSOR_NONE. Returns false only on malformed CBOR.
+static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot) {
+    memset(slot, 0, sizeof(*slot));
+    bool has_kind = false;
+    // Buffer the type-specific (union) fields and resolve them against `type` only
+    // AFTER the whole map is read: CBOR key order is not guaranteed, and writing both
+    // union arms (analog scale/offset and the sdi12 chan[]) directly would alias --
+    // a slot carrying both would corrupt map.sdi12.count. So commit one arm at the end.
+    float a_scale = 0.0f, a_offset = 0.0f;
+    savia_channel_t chans[SAVIA_SDI12_MAX_CHANNELS];
+    uint8_t chan_count = 0;
+    memset(chans, 0, sizeof(chans));
+
+    uint64_t fcount;
+    if (!cbor_r_map(r, &fcount)) return false;
+    for (uint64_t f = 0; ; f++) {
+        if (fcount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(r)) break; }
+        else if (f >= fcount) break;
+        const char *fk; size_t fkn;
+        if (!cbor_r_text(r, &fk, &fkn)) return false;
+        if (cbor_text_eq(fk, fkn, "gpio")) {
+            uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->gpio = (uint8_t) v;
+        } else if (cbor_text_eq(fk, fkn, "type")) {
+            const char *s; size_t sn; if (!cbor_r_text(r, &s, &sn)) return false;
+            slot->type = sensor_type_from_str(s, sn);
+        } else if (cbor_text_eq(fk, fkn, "addr")) {
+            const char *s; size_t sn; if (!cbor_r_text(r, &s, &sn)) return false;
+            slot->address = sn > 0 ? s[0] : 0;
+        } else if (cbor_text_eq(fk, fkn, "kind")) {
+            const char *s; size_t sn; if (!cbor_r_text(r, &s, &sn)) return false;
+            int k = kind_from_str(s, sn);
+            if (k >= 0) { slot->kind = (uint8_t) k; has_kind = true; }
+        } else if (cbor_text_eq(fk, fkn, "depth_cm")) {
+            if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->depth_cm = (uint8_t) v; }
+        } else if (cbor_text_eq(fk, fkn, "scale")) {
+            double d; if (!cbor_r_double(r, &d)) return false; a_scale = (float) d;
+        } else if (cbor_text_eq(fk, fkn, "offset")) {
+            double d; if (!cbor_r_double(r, &d)) return false; a_offset = (float) d;
+        } else if (cbor_text_eq(fk, fkn, "chan")) {
+            uint64_t ccount;
+            if (!cbor_r_array(r, &ccount)) return false;
+            for (uint64_t c = 0; ; c++) {
+                if (ccount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(r)) break; }
+                else if (c >= ccount) break;
+                uint64_t mc;
+                if (!cbor_r_map(r, &mc)) return false;
+                savia_channel_t ch = { 0, 0 };
+                for (uint64_t m = 0; ; m++) {
+                    if (mc == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(r)) break; }
+                    else if (m >= mc) break;
+                    const char *ck; size_t ckn;
+                    if (!cbor_r_text(r, &ck, &ckn)) return false;
+                    if (cbor_text_eq(ck, ckn, "kind")) {
+                        const char *s; size_t sn; if (!cbor_r_text(r, &s, &sn)) return false;
+                        int k = kind_from_str(s, sn); if (k >= 0) ch.kind = (uint8_t) k;
+                    } else if (cbor_text_eq(ck, ckn, "depth_cm")) {
+                        uint64_t v; if (!cbor_r_uint(r, &v)) return false; ch.depth_cm = (uint8_t) v;
+                    } else if (!cbor_r_skip(r)) return false;
+                }
+                if (chan_count < SAVIA_SDI12_MAX_CHANNELS) chans[chan_count++] = ch;  // extras dropped
+            }
+        } else if (!cbor_r_skip(r)) return false;   // "port" and unknowns
+    }
+
+    // Commit ONLY the union arm that matches the resolved type; the other arm stays
+    // zeroed (from the memset), so a slot can never hold two arms at once.
+    if (slot->type == SENSOR_ANALOG_LINEAR) {
+        slot->map.analog.scale = a_scale;
+        slot->map.analog.offset = a_offset;
+    } else if (slot->type == SENSOR_SDI12_GENERIC) {
+        slot->map.sdi12.count = chan_count;
+        for (uint8_t i = 0; i < chan_count; i++) slot->map.sdi12.ch[i] = chans[i];
+    }
+    // Sensible default kind for a 1-Wire thermometer when the app omits it.
+    if (slot->type == SENSOR_ONEWIRE_DS18B20 && !has_kind) slot->kind = READING_SOIL_TEMPERATURE;
+    return true;
 }
 
 bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *out) {
@@ -451,6 +607,21 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
             if (!cbor_r_null(&r)) {
                 uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
                 out->log_level = (uint8_t) v; out->has_log_level = true;
+            }
+        } else if (cbor_text_eq(k, kn, "sensors")) {
+            if (!cbor_r_null(&r)) {                       // null -> leave slots untouched
+                uint64_t acount;
+                if (!cbor_r_array(&r, &acount)) return false;
+                uint8_t ni = 0;
+                for (uint64_t j = 0; ; j++) {
+                    if (acount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
+                    else if (j >= acount) break;
+                    savia_sensor_slot_t slot;
+                    if (!parse_sensor_slot(&r, &slot)) return false;
+                    if (ni < SAVIA_MAX_SENSORS) out->sensors[ni++] = slot;   // extras dropped
+                }
+                out->sensor_count = ni;
+                out->has_sensors = true;
             }
         } else {
             if (!cbor_r_skip(&r)) return false;

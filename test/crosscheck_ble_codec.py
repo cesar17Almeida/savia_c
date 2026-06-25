@@ -84,12 +84,18 @@ def check():
     assert preds[1]["port"] is None and preds[1]["confidence"] is None
     print("check: predictions OK (incl. CBOR null)")
 
-    # 5) status
+    # 5) status (incl. the LoRa link block)
     st = load("status")
-    assert set(st.keys()) == {"v", "fw", "uptime_s", "last_sync_ms", "weather_updated_ms"}
+    assert set(st.keys()) == {"v", "fw", "uptime_s", "last_sync_ms", "weather_updated_ms", "lora"}
     assert st["v"] == 1 and st["fw"] == "0.1.0-c" and st["uptime_s"] == 12345
     assert st["last_sync_ms"] == 1700000000000 and st["weather_updated_ms"] is None
-    print("check: status OK")
+    lora = st["lora"]
+    assert set(lora.keys()) == {"inited", "joined", "rssi", "snr", "last_ms", "module", "seq"}
+    assert lora["inited"] is True and lora["joined"] is True
+    assert lora["rssi"] == -106 and abs(lora["snr"] - 7.0) < 1e-6
+    assert lora["last_ms"] == 1700000000000
+    assert lora["module"] == "v4.0.11" and lora["seq"] == 3
+    print("check: status OK (incl. lora block)")
 
     # 6) count
     assert load("count") == {"count": 42}

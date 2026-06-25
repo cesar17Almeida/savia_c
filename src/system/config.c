@@ -30,8 +30,9 @@ void config_load_defaults(station_config_t *cfg) {
     cfg->sensors[0].address = '0';
     cfg->sensor_count = 1;
 
-    // LoRa off by default; UART1 on GPIO4/5 when enabled.
+    // LoRa off by default (the app enables it / pings on demand). Default pins are
+    // the field wiring: Wio-E5 on UART0 GP16(TX)/GP17(RX). Last-signal fields zeroed.
     cfg->lora_enabled = false;
-    cfg->lora_uart_tx_gpio = 4;
-    cfg->lora_uart_rx_gpio = 5;
+    cfg->lora_uart_tx_gpio = 16;
+    cfg->lora_uart_rx_gpio = 17;
 }

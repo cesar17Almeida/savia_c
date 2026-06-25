@@ -165,8 +165,12 @@ int main(void) {
     assert(l > 0);
     write_file("/tmp/savia_preds.cbor", buf, l);
 
-    // --- status + count ---
-    l = ble_serialize_status(12345, 1700000000000ULL, 0, buf, sizeof(buf));
+    // --- status + count (with a LoRa link block) ---
+    lora_status_t lst = { .inited = true, .joined = true, .has_signal = true,
+                          .rssi_dbm = -106, .snr_ddb = 70,
+                          .last_signal_ms = 1700000000000ULL,
+                          .module = "v4.0.11", .seq = 3 };
+    l = ble_serialize_status(12345, 1700000000000ULL, 0, &lst, buf, sizeof(buf));
     assert(l > 0);
     write_file("/tmp/savia_status.cbor", buf, l);
     l = ble_serialize_count(42, buf, sizeof(buf));

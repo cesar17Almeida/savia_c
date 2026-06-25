@@ -26,6 +26,8 @@
 #define SAVIA_OP_MOCK        "mock"    // inject mock data (dev): kind=hs10|hs30|ta reading, or pred forecast
 #define SAVIA_OP_INGEST      "ingest"     // upsert timestamped points: data:[{ts_ms,kind,value,depth_cm?}]
 #define SAVIA_OP_INGEST_OK   "ingest_ok"  // ack: {created,updated}
+#define SAVIA_OP_LORA        "lora"       // trigger an on-demand LoRa ping (join+uplink); result lands in status
+#define SAVIA_OP_AT          "at"         // raw AT terminal: {cmd?} queues a command, returns {seq,cmd,lines}
 #define SAVIA_OP_INFER       "infer"
 #define SAVIA_OP_INFER_DONE  "infer_done"
 #define SAVIA_OP_SET         "set"

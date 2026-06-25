@@ -1,4 +1,5 @@
 #include "savia/power.h"
+#include "savia/ble.h"
 #include "pico/stdlib.h"
 
 // The button is wired to GND with an internal pull-up, so it reads low when
@@ -33,6 +34,9 @@ savia_wake_reason_t power_deep_sleep(const station_config_t *cfg, uint32_t secon
     while (elapsed < seconds * 1000u) {
         if (!gpio_get(cfg->wake_button_gpio)) {  // active-low press
             return SAVIA_WAKE_BUTTON;
+        }
+        if (ble_lora_ping_pending() || ble_lora_at_pending()) {  // pending LoRa work -> wake
+            return SAVIA_WAKE_TIMER;
         }
         sleep_ms(step_ms);
         elapsed += step_ms;

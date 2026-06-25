@@ -30,7 +30,10 @@ uint8_t pinmap_caps_for_sensor(savia_sensor_type_t type) {
     switch (type) {
         case SENSOR_SDI12_AQUACHECK:
         case SENSOR_SDI12_GENERIC:
-            return SAVIA_PIN_CAP_PIO;   // SDI-12 framing is driven by a PIO program
+        case SENSOR_ONEWIRE_DS18B20:
+            return SAVIA_PIN_CAP_PIO;   // SDI-12 / 1-Wire framing is driven by a PIO program
+        case SENSOR_ANALOG_LINEAR:
+            return SAVIA_PIN_CAP_ADC;   // real analog input -> GP26..GP28 only
         default:
             return 0;
     }
@@ -95,6 +98,32 @@ savia_pin_assign_t pinmap_check_assign(const station_config_t *cfg, uint8_t gpio
         if ((int) i == exclude_slot) continue;
         if (cfg->sensors[i].type != SENSOR_NONE && cfg->sensors[i].gpio == gpio) {
             return SAVIA_PIN_ASSIGN_OCCUPIED;
+        }
+    }
+    return SAVIA_PIN_ASSIGN_OK;
+}
+
+savia_pin_assign_t pinmap_check_sensors(const station_config_t *base,
+                                        const savia_sensor_slot_t *slots, uint8_t n,
+                                        int *bad_index) {
+    if (bad_index) *bad_index = -1;
+    if (n > SAVIA_MAX_SENSORS) n = SAVIA_MAX_SENSORS;
+
+    // Validate the proposed set against a scratch config that keeps `base`'s system
+    // reservations (wake button / LoRa UART) but swaps in the NEW sensors -- so a
+    // pin shared by two of the new slots is caught as OCCUPIED, not silently kept.
+    station_config_t scratch = *base;
+    scratch.sensor_count = n;
+    for (uint8_t i = 0; i < n; i++) scratch.sensors[i] = slots[i];
+    for (uint8_t i = n; i < SAVIA_MAX_SENSORS; i++) scratch.sensors[i].type = SENSOR_NONE;
+
+    for (uint8_t i = 0; i < n; i++) {
+        if (slots[i].type == SENSOR_NONE) continue;
+        uint8_t need = pinmap_caps_for_sensor(slots[i].type);
+        savia_pin_assign_t r = pinmap_check_assign(&scratch, slots[i].gpio, need, (int) i);
+        if (r != SAVIA_PIN_ASSIGN_OK) {
+            if (bad_index) *bad_index = (int) i;
+            return r;
         }
     }
     return SAVIA_PIN_ASSIGN_OK;

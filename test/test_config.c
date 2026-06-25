@@ -27,9 +27,11 @@ int main(void) {
     assert(cfg.sensors[0].gpio == 2);
     assert(cfg.sensors[0].address == '0');
 
-    // Remaining slots zeroed; LoRa off by default.
+    // Remaining slots zeroed; LoRa off by default, pins on the field wiring (UART0).
     assert(cfg.sensors[1].type == SENSOR_NONE);
     assert(cfg.lora_enabled == false);
+    assert(cfg.lora_uart_tx_gpio == 16 && cfg.lora_uart_rx_gpio == 17);
+    assert(cfg.lora_last_signal_ms == 0);   // no signal persisted yet
 
     printf("test_config: OK (config defaults)\n");
     return 0;

@@ -6,6 +6,7 @@
 #include "savia/types.h"
 #include "savia/config.h"
 #include "savia/device.h"
+#include "savia/lora.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -20,7 +21,8 @@ size_t ble_serialize_aggregations(const savia_aggregate_t *rows, size_t n,
 size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
                                  uint8_t *out, size_t cap);  // [{ts_ms,model,kind,port,value,confidence}]
 size_t ble_serialize_status(uint32_t uptime_s, uint64_t last_sync_ms,
-                            uint64_t weather_updated_ms, uint8_t *out, size_t cap);
+                            uint64_t weather_updated_ms, const lora_status_t *lora,
+                            uint8_t *out, size_t cap);
 size_t ble_serialize_count(uint64_t count, uint8_t *out, size_t cap);  // {count:N}
 
 // Parsers for the write characteristics.
@@ -47,7 +49,11 @@ typedef struct {
     bool     has_from;  uint64_t from_ms;
     bool     has_to;    uint64_t to_ms;
     bool     has_limit; uint64_t limit;
+    bool     has_cmd;   char     cmd[SAVIA_AT_CMD_MAX];   // raw AT command (op:"at")
 } ble_data_request_t;
+
+// Serialize the last raw AT exchange (op:"at" response): {seq, cmd, lines:[...]}.
+size_t ble_serialize_at_result(const lora_at_result_t *r, uint8_t *out, size_t cap);
 
 bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *out);
 
@@ -81,6 +87,10 @@ typedef struct {
     bool     has_daily_hour;  uint8_t  daily_hour;
     bool     has_mock;        bool     mock;
     bool     has_log_level;   uint8_t  log_level;
+    // Full replacement of the sensor table (a sparse patch that omits "sensors"
+    // leaves the slots untouched). Validated server-side via pinmap_check_sensors.
+    bool     has_sensors;     uint8_t  sensor_count;
+    savia_sensor_slot_t sensors[SAVIA_MAX_SENSORS];
 } ble_config_patch_t;
 
 bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *out);

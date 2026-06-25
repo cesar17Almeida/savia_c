@@ -19,6 +19,11 @@ echo "== 1b) pinmap test =="
 /tmp/savia_test_pinmap
 
 echo ""
+echo "== 1c) sensors config test (parse + atomic validation + serialize) =="
+"$CC" $CFLAGS test/test_sensors.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c -o /tmp/savia_test_sensors
+/tmp/savia_test_sensors
+
+echo ""
 echo "== 2) storage + clock test =="
 "$CC" $CFLAGS test/test_storage.c src/storage/storage_flash.c src/system/clock.c -o /tmp/savia_test_storage
 /tmp/savia_test_storage

@@ -21,6 +21,8 @@
 
 #include "savia/ble_codec.h"
 #include "savia/device.h"
+#include "savia/pinmap.h"
+#include "savia/lora.h"
 #include "savia/auth.h"
 #include "savia/storage.h"
 #include "savia/clock.h"
@@ -87,6 +89,9 @@ static bool     g_authed;
 static station_config_t *g_cfg;          // held from ble_init; app writes mutate it
 static bool     g_config_notify_on;
 static bool     g_config_dirty;          // set on write, drained by the supervisor loop
+static bool     g_lora_ping_pending;     // app asked for a LoRa ping; supervisor runs it
+static bool     g_at_pending;            // app queued a raw AT command (terminal)
+static char     g_at_cmd[SAVIA_AT_CMD_MAX];
 static uint8_t  g_cfg_ack[64];
 static size_t   g_cfg_ack_len;
 static bool     g_cfg_ack_pending;       // ack waiting for a CAN_SEND_NOW slot
@@ -192,6 +197,20 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
         LOG_INFO("BLE: ingest %s (created %u, updated %u)\n",
                  ok ? "ok" : "BAD", (unsigned) created, (unsigned) updated);
         g_resp_len = ble_serialize_ingest_ok(created, updated, g_resp, sizeof(g_resp));
+    } else if (strcmp(dr.op, SAVIA_OP_LORA) == 0) {   // on-demand LoRa ping (join+uplink)
+        g_lora_ping_pending = true;                   // supervisor runs the blocking AT
+        LOG_INFO("BLE: lora ping requested\n");
+        g_resp_len = ble_serialize_count(1, g_resp, sizeof(g_resp));   // queued ack
+    } else if (strcmp(dr.op, SAVIA_OP_AT) == 0) {     // raw AT terminal: queue + return last result
+        if (dr.has_cmd && dr.cmd[0]) {
+            strncpy(g_at_cmd, dr.cmd, sizeof g_at_cmd - 1);
+            g_at_cmd[sizeof g_at_cmd - 1] = '\0';
+            g_at_pending = true;
+            LOG_INFO("BLE: AT queued: %s\n", g_at_cmd);
+        }
+        static lora_at_result_t atr;                  // ~650 B -> keep off the stack
+        lora_get_at_result(&atr);
+        g_resp_len = ble_serialize_at_result(&atr, g_resp, sizeof(g_resp));
     } else {  // GET
         if (strcmp(dr.kind, SAVIA_KIND_RAW) == 0) {
             size_t n = storage_query_raw(from, to, lim, q_rd, sizeof(q_rd) / sizeof(q_rd[0]));
@@ -228,65 +247,75 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
     const char *err = NULL;
     if (!ok || cp.version != SAVIA_PROTOCOL_VERSION || strcmp(cp.op, SAVIA_OP_SET) != 0) {
         ok = false; err = "bad patch";
+    } else if (!g_cfg) {
+        ok = false; err = "no config";
     } else {
-        if (cp.has_sleep_s) {
+        // Stage every present field into a scratch copy and validate; commit only if
+        // the WHOLE patch is valid, so a later rejection (e.g. a bad sensors[]) never
+        // leaves an earlier field half-applied or persisted (cross-field atomicity).
+        station_config_t next = *g_cfg;
+
+        if (ok && cp.has_sleep_s) {
             if (cp.sleep_s < SAVIA_SLEEP_MIN_S || cp.sleep_s > SAVIA_SLEEP_MAX_S) {
                 ok = false; err = "sleep_s out of range";
-            } else if (g_cfg) {
-                g_cfg->sleep_seconds = cp.sleep_s;
-                g_config_dirty = true;            // persisted by the supervisor loop
-                LOG_INFO("BLE: config set sleep_s=%u\n", (unsigned) cp.sleep_s);
-            }
+            } else next.sleep_seconds = cp.sleep_s;
         }
-        if (ok && cp.has_deep_sleep && g_cfg) {
-            g_cfg->deep_sleep_enabled = cp.deep_sleep;
-            g_config_dirty = true;
-            LOG_INFO("BLE: config set deep_sleep=%d\n", (int) cp.deep_sleep);
-        }
-        if (ok && cp.has_capture_s && g_cfg) {
+        if (ok && cp.has_deep_sleep) next.deep_sleep_enabled = cp.deep_sleep;
+        if (ok && cp.has_capture_s) {
             if (cp.capture_s < SAVIA_CAPTURE_MIN_S || cp.capture_s > SAVIA_SLEEP_MAX_S) {
                 ok = false; err = "capture_s out of range";
-            } else {
-                g_cfg->capture_interval_s = cp.capture_s;
-                g_config_dirty = true;
-                LOG_INFO("BLE: config set capture_s=%u\n", (unsigned) cp.capture_s);
-            }
+            } else next.capture_interval_s = cp.capture_s;
         }
-        if (ok && cp.has_daily_hour && g_cfg) {
+        if (ok && cp.has_daily_hour) {
             if (cp.daily_hour > 23) {
                 ok = false; err = "daily_hour out of range";
-            } else {
-                g_cfg->daily_hour = cp.daily_hour;
-                g_config_dirty = true;
-                LOG_INFO("BLE: config set daily_hour=%u\n", (unsigned) cp.daily_hour);
-            }
+            } else next.daily_hour = cp.daily_hour;
         }
-        if (ok && cp.has_name && g_cfg) {
+        if (ok && cp.has_name) {
             if (cp.name[0] == 0) {
                 ok = false; err = "name empty";
             } else {
-                strncpy(g_cfg->ble_name, cp.name, SAVIA_BLE_NAME_MAX - 1);
-                g_cfg->ble_name[SAVIA_BLE_NAME_MAX - 1] = 0;
-                build_adv_data(g_cfg->ble_name);
-                gap_advertisements_set_data(g_adv_data_len, g_adv_data);  // applies on next adv
-                g_config_dirty = true;
-                LOG_INFO("BLE: config set name='%s'\n", g_cfg->ble_name);
+                strncpy(next.ble_name, cp.name, SAVIA_BLE_NAME_MAX - 1);
+                next.ble_name[SAVIA_BLE_NAME_MAX - 1] = 0;
             }
         }
-        if (ok && cp.has_mock && g_cfg) {
-            g_cfg->mock_enabled = cp.mock;
-            g_config_dirty = true;
-            LOG_INFO("BLE: config set mock=%d\n", (int) cp.mock);
-        }
-        if (ok && cp.has_log_level && g_cfg) {
+        if (ok && cp.has_mock) next.mock_enabled = cp.mock;
+        if (ok && cp.has_log_level) {
             if (cp.log_level > SAVIA_LOG_WARN) {
                 ok = false; err = "log_level out of range";
+            } else next.log_level = cp.log_level;
+        }
+        if (ok && cp.has_sensors) {
+            // Validate the whole proposed table atomically against the pin inventory
+            // (caps + reservations + intra-batch collisions) before committing any of it.
+            int bad = -1;
+            savia_pin_assign_t r = pinmap_check_sensors(&next, cp.sensors, cp.sensor_count, &bad);
+            if (r != SAVIA_PIN_ASSIGN_OK) {
+                static char serr[40];
+                snprintf(serr, sizeof serr, "sensor %d: %s", bad, pinmap_assign_str(r));
+                ok = false; err = serr;
             } else {
-                g_cfg->log_level = cp.log_level;
-                savia_log_set_level(cp.log_level);   // apply immediately
-                g_config_dirty = true;
-                LOG_INFO("BLE: config set log_level=%u\n", (unsigned) cp.log_level);
+                for (uint8_t i = 0; i < cp.sensor_count; i++) next.sensors[i] = cp.sensors[i];
+                for (uint8_t i = cp.sensor_count; i < SAVIA_MAX_SENSORS; i++)
+                    next.sensors[i].type = SENSOR_NONE;
+                next.sensor_count = cp.sensor_count;
             }
+        }
+
+        // Commit once, only if everything validated AND something actually changed
+        // (no needless flash erase/program for a no-op patch).
+        if (ok && memcmp(g_cfg, &next, sizeof(next)) != 0) {
+            bool name_changed = strcmp(g_cfg->ble_name, next.ble_name) != 0;
+            bool log_changed  = g_cfg->log_level != next.log_level;
+            *g_cfg = next;
+            g_config_dirty = true;                 // persisted by the supervisor loop
+            if (name_changed) {
+                build_adv_data(g_cfg->ble_name);
+                gap_advertisements_set_data(g_adv_data_len, g_adv_data);  // applies on next adv
+            }
+            if (log_changed) savia_log_set_level(g_cfg->log_level);
+            LOG_INFO("BLE: config applied (sensors=%s, name='%s')\n",
+                     cp.has_sensors ? "yes" : "no", g_cfg->ble_name);
         }
     }
     if (!ok) LOG_INFO("BLE: bad config (%s)\n", err ? err : "?");
@@ -354,14 +383,17 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
                                              offset, buffer, buffer_size);
     }
     if (att_handle == H_STATUS) {
-        uint8_t tmp[96];
+        uint8_t tmp[192];   // +lora{} block
         uint32_t up_s = (uint32_t)(to_ms_since_boot(get_absolute_time()) / 1000);
+        lora_status_t ls; lora_get_status(&ls);
         size_t n = ble_serialize_status(up_s, clock_last_sync_ms(),
-                                        g_weather_updated_ms, tmp, sizeof(tmp));
+                                        g_weather_updated_ms, &ls, tmp, sizeof(tmp));
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
     }
     if (att_handle == H_CONFIG) {
-        static uint8_t tmp[512];   // snapshot: device identity + settings + sensors
+        // Worst case ~1.2 KB: 6 generic SDI-12 slots x 4 channels each carry their
+        // chan[] maps; a 512 B buffer would overflow -> serialize returns 0 -> empty read.
+        static uint8_t tmp[2048];   // snapshot: device identity + settings + sensors
         size_t n = ble_serialize_config(savia_device_id(), g_cfg, tmp, sizeof(tmp));
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
     }
@@ -447,6 +479,8 @@ static void packet_handler(uint8_t type, uint16_t channel, uint8_t *packet, uint
             g_notify_on = false;
             g_config_notify_on = false;
             g_cfg_ack_pending = false;
+            g_lora_ping_pending = false;   // a queued ping dies with the client that asked
+            g_at_pending = false;
             g_resp_seq = g_resp_total = 0;
             LOG_INFO("BLE: disconnected\n");
             break;
@@ -525,11 +559,32 @@ bool ble_take_config_dirty(void) {
     return true;
 }
 
+bool ble_take_lora_ping(void) {
+    if (!g_lora_ping_pending) return false;
+    g_lora_ping_pending = false;
+    return true;
+}
+
+bool ble_lora_ping_pending(void) { return g_lora_ping_pending; }
+
+bool ble_take_lora_at(char *cmd, size_t cap) {
+    if (!g_at_pending) return false;
+    g_at_pending = false;
+    if (cmd && cap) { strncpy(cmd, g_at_cmd, cap - 1); cmd[cap - 1] = '\0'; }
+    return true;
+}
+
+bool ble_lora_at_pending(void) { return g_at_pending; }
+
 #else  // SAVIA_ENABLE_BLE == 0
 
 void ble_init(station_config_t *cfg) { (void) cfg; }
 void ble_poll(uint32_t budget_ms) { (void) budget_ms; }
 bool ble_take_config_dirty(void) { return false; }
+bool ble_take_lora_ping(void) { return false; }
+bool ble_lora_ping_pending(void) { return false; }
+bool ble_take_lora_at(char *cmd, size_t cap) { (void) cmd; (void) cap; return false; }
+bool ble_lora_at_pending(void) { return false; }
 void ble_radio_suspend(void) { }
 void ble_radio_resume(void) { }
 
