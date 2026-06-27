@@ -16,6 +16,7 @@
 #include "savia/storage.h"
 #include "savia/clock.h"
 #include "savia/ble.h"
+#include "savia/status_led.h"
 #include "savia/lora.h"
 #include "savia/inference.h"
 #include "savia/scheduler.h"
@@ -107,6 +108,7 @@ int main(void) {
     bool mock_seeded = false;
     if (cfg.mock_enabled) { seed_mock_readings(); mock_seeded = true; }   // dev dataset
     ble_init(&cfg);
+    status_led_init();   // onboard LED: solid=paired, 1s blink=BLE on, 3s blink=operating
     if (cfg.lora_enabled) {
         lora_init(&cfg);
     }

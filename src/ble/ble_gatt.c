@@ -79,6 +79,7 @@ static void build_adv_data(const char *name) {
 static btstack_packet_callback_registration_t hci_event_cb;
 static hci_con_handle_t g_con = HCI_CON_HANDLE_INVALID;
 static bool     g_notify_on;
+static bool     g_advertising;          // radio up + advertising (for the status LED)
 static uint64_t g_weather_updated_ms;
 
 // auth (0014) state: a fresh nonce per connection; authed cleared on connect.
@@ -528,6 +529,7 @@ static void ble_bringup(void) {
     gap_scan_response_set_data(sizeof(scan_resp_data), (uint8_t *) scan_resp_data);
     gap_advertisements_enable(1);
     hci_power_control(HCI_POWER_ON);
+    g_advertising = true;
 }
 
 void ble_init(station_config_t *cfg) {
@@ -538,6 +540,7 @@ void ble_init(station_config_t *cfg) {
 
 void ble_radio_suspend(void) {
     gap_advertisements_enable(0);
+    g_advertising = false;
     hci_power_control(HCI_POWER_OFF);
     cyw43_arch_deinit();                 // power down the wireless chip (the big draw)
     LOG_INFO("BLE: radio suspended (deep sleep)\n");
@@ -576,6 +579,9 @@ bool ble_take_lora_at(char *cmd, size_t cap) {
 
 bool ble_lora_at_pending(void) { return g_at_pending; }
 
+bool ble_is_connected(void) { return g_con != HCI_CON_HANDLE_INVALID; }
+bool ble_is_advertising(void) { return g_advertising; }
+
 #else  // SAVIA_ENABLE_BLE == 0
 
 void ble_init(station_config_t *cfg) { (void) cfg; }
@@ -587,5 +593,7 @@ bool ble_take_lora_at(char *cmd, size_t cap) { (void) cmd; (void) cap; return fa
 bool ble_lora_at_pending(void) { return false; }
 void ble_radio_suspend(void) { }
 void ble_radio_resume(void) { }
+bool ble_is_connected(void) { return false; }
+bool ble_is_advertising(void) { return false; }
 
 #endif

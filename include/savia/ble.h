@@ -35,4 +35,8 @@ bool ble_lora_at_pending(void);
 void ble_radio_suspend(void);
 void ble_radio_resume(void);
 
+// State for the status LED. Both false when BLE is compiled out.
+bool ble_is_connected(void);     // a central is connected (paired)
+bool ble_is_advertising(void);   // radio up and advertising (discoverable)
+
 #endif // SAVIA_BLE_H

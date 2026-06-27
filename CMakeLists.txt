@@ -43,6 +43,7 @@ add_executable(savia_c
   src/system/config_store.c
   src/system/pinmap.c
   src/system/device.c
+  src/system/status_led.c    # onboard status LED (paired / BLE on / operating)
   src/system/clock.c
   src/system/log.c
   src/system/inference.c
