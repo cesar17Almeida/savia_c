@@ -5,7 +5,7 @@ set(CMAKE_C_STANDARD 11)
 pico_sdk_init()
 
 add_executable(sdi12_bringup main.c)
-target_link_libraries(sdi12_bringup pico_stdlib)
+target_link_libraries(sdi12_bringup pico_stdlib pico_cyw43_arch_none)
 
 # Serial output over USB CDC (the probe is on GP18, not the UART pins).
 pico_enable_stdio_usb(sdi12_bringup 1)
