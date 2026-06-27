@@ -24,7 +24,10 @@ void config_load_defaults(station_config_t *cfg) {
     cfg->mock_enabled = true;
     cfg->log_level = 1;            // SAVIA_LOG_INFO
 
-    // One AquaCheck SDI-12 probe on GPIO2, address '0' (exposes 10 cm + 30 cm).
+    // AquaCheck SDI-12 probe, addr '0'. Default pin GP2; the real pin is set from
+    // the app (bring-up wired it to GP18). Real probe = SKU 1120-0404: 4 sensors at
+    // 10/20/30/40 cm, order top->bottom (HS10=value[0], HS30=value[2]).
+    // Verified by bring-up; see tools/sdi12_bringup/AQUACHECK_RESPONSES.md.
     cfg->sensors[0].type = SENSOR_SDI12_AQUACHECK;
     cfg->sensors[0].gpio = 2;
     cfg->sensors[0].address = '0';
