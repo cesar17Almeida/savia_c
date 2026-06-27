@@ -5,8 +5,17 @@
 #define MS_PER_DAY  86400000ULL
 
 void scheduler_init(savia_scheduler_t *s) {
-    s->next_capture_ms = 0;     // first tick captures immediately
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) s->next_sensor_ms[i] = 0;  // all due on first tick
     s->last_daily_day = -1;
+}
+
+// Effective cadence (ms) for sensor i: its own sample_interval_s, or the global
+// default when 0; never 0 (falls back to hourly).
+static uint64_t sensor_interval_ms(const savia_sensor_slot_t *sensors, uint8_t i,
+                                   uint32_t default_interval_s) {
+    uint32_t secs = sensors[i].sample_interval_s ? sensors[i].sample_interval_s : default_interval_s;
+    uint64_t ms = (uint64_t) secs * MS_PER_S;
+    return ms == 0 ? MS_PER_HOUR : ms;
 }
 
 // ms from now until the next time-of-day `daily_hour` boundary that still needs
@@ -19,16 +28,19 @@ static uint64_t ms_until_daily(uint64_t now_ms, uint8_t daily_hour, int32_t last
 }
 
 savia_sched_action_t scheduler_tick(savia_scheduler_t *s, uint64_t now_ms,
-                                    uint32_t capture_interval_s, uint8_t daily_hour) {
-    savia_sched_action_t act = { false, false };
-    uint64_t interval = (uint64_t) capture_interval_s * MS_PER_S;
-    if (interval == 0) interval = MS_PER_HOUR;
+                                    const savia_sensor_slot_t *sensors, uint8_t count,
+                                    uint32_t default_interval_s, uint8_t daily_hour) {
+    savia_sched_action_t act = { 0, false };
+    if (count > SAVIA_MAX_SENSORS) count = SAVIA_MAX_SENSORS;
 
-    if (s->next_capture_ms == 0 || now_ms >= s->next_capture_ms) {
-        act.capture = true;
-        uint64_t base = (s->next_capture_ms == 0) ? now_ms : s->next_capture_ms;
-        s->next_capture_ms = base + interval;
-        while (s->next_capture_ms <= now_ms) s->next_capture_ms += interval;  // catch up
+    for (uint8_t i = 0; i < count; i++) {
+        uint64_t interval = sensor_interval_ms(sensors, i, default_interval_s);
+        if (s->next_sensor_ms[i] == 0 || now_ms >= s->next_sensor_ms[i]) {
+            act.capture_mask |= (uint8_t)(1u << i);
+            uint64_t base = (s->next_sensor_ms[i] == 0) ? now_ms : s->next_sensor_ms[i];
+            s->next_sensor_ms[i] = base + interval;
+            while (s->next_sensor_ms[i] <= now_ms) s->next_sensor_ms[i] += interval;  // catch up
+        }
     }
 
     int32_t today = (int32_t)(now_ms / MS_PER_DAY);
@@ -41,16 +53,24 @@ savia_sched_action_t scheduler_tick(savia_scheduler_t *s, uint64_t now_ms,
 }
 
 uint32_t scheduler_next_sleep_s(const savia_scheduler_t *s, uint64_t now_ms,
-                                uint32_t sleep_s, uint32_t capture_interval_s,
-                                uint8_t daily_hour) {
-    uint64_t interval = (uint64_t) capture_interval_s * MS_PER_S;
-    if (interval == 0) interval = MS_PER_HOUR;
+                                uint32_t sleep_s,
+                                const savia_sensor_slot_t *sensors, uint8_t count,
+                                uint32_t default_interval_s, uint8_t daily_hour) {
+    if (count > SAVIA_MAX_SENSORS) count = SAVIA_MAX_SENSORS;
 
-    uint64_t until_capture = (s->next_capture_ms > now_ms)
-        ? (s->next_capture_ms - now_ms) : interval;
+    // Soonest sensor due. With no sensors configured this stays "very far" and the
+    // daily wake (always finite) bounds the nap.
+    uint64_t next = (uint64_t) -1;
+    for (uint8_t i = 0; i < count; i++) {
+        uint64_t interval = sensor_interval_ms(sensors, i, default_interval_s);
+        uint64_t until = (s->next_sensor_ms[i] > now_ms)
+            ? (s->next_sensor_ms[i] - now_ms) : interval;
+        if (until < next) next = until;
+    }
+
     uint64_t until_daily = ms_until_daily(now_ms, daily_hour, s->last_daily_day);
+    if (until_daily < next) next = until_daily;
 
-    uint64_t next = until_capture < until_daily ? until_capture : until_daily;
     uint64_t cap = (uint64_t) sleep_s * MS_PER_S;
     if (cap > 0 && cap < next) next = cap;
 

@@ -287,6 +287,18 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
             } else next.log_level = cp.log_level;
         }
         if (ok && cp.has_sensors) {
+            // A per-sensor cadence (0 = follow capture_s) must sit in the same range
+            // as the global capture interval; reject the whole table otherwise.
+            for (uint8_t i = 0; ok && i < cp.sensor_count; i++) {
+                uint32_t iv = cp.sensors[i].sample_interval_s;
+                if (iv != 0 && (iv < SAVIA_CAPTURE_MIN_S || iv > SAVIA_SLEEP_MAX_S)) {
+                    static char ierr[40];
+                    snprintf(ierr, sizeof ierr, "sensor %d: interval_s out of range", i);
+                    ok = false; err = ierr;
+                }
+            }
+        }
+        if (ok && cp.has_sensors) {
             // Validate the whole proposed table atomically against the pin inventory
             // (caps + reservations + intra-batch collisions) before committing any of it.
             int bad = -1;

@@ -59,6 +59,7 @@ typedef struct {
     char    address;     // SDI-12 address, e.g. '0' (ignored for analog / 1-Wire)
     uint8_t kind;        // savia_reading_kind_t for the analog / 1-Wire value
     uint8_t depth_cm;    // depth for that value (0 = none)
+    uint32_t sample_interval_s;  // per-sensor capture cadence (s); 0 = use the global capture_interval_s
     union {
         struct { float scale, offset; } analog;   // SENSOR_ANALOG_LINEAR
         struct {                                   // SENSOR_SDI12_GENERIC

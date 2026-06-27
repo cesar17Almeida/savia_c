@@ -114,7 +114,8 @@ def check():
     assert dev["model"] == "Raspberry Pi Pico WH" and dev["mcu"] == "RP2040"
     assert len(cfg["sensors"]) == 1
     s0 = cfg["sensors"][0]
-    assert s0 == {"port": 1, "gpio": 2, "type": "sdi12_aquacheck", "addr": "0"}
+    # interval_s = 0 -> the sensor follows the global capture_s (default config).
+    assert s0 == {"port": 1, "gpio": 2, "type": "sdi12_aquacheck", "addr": "0", "interval_s": 0}
     print("check: config snapshot OK (device card + schedule + sensors)")
 
     # 8) config ack

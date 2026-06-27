@@ -22,11 +22,12 @@ static size_t build_patch(uint8_t *buf, size_t cap) {
     cbor_w_textz(&w, "sensors");
     cbor_w_array(&w, 4);
 
-    // 0: AquaCheck SDI-12 on GP2, addr '0' (fixed layout -> base fields only).
-    cbor_w_map(&w, 3);
+    // 0: AquaCheck SDI-12 on GP2, addr '0' (fixed layout) + a per-sensor 10-min cadence.
+    cbor_w_map(&w, 4);
     cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, 2);
     cbor_w_textz(&w, "type"); cbor_w_textz(&w, "sdi12_aquacheck");
     cbor_w_textz(&w, "addr"); cbor_w_textz(&w, "0");
+    cbor_w_textz(&w, "interval_s"); cbor_w_uint(&w, 600);
 
     // 1: analog linear on GP26, soil_temperature, value = 0.1*raw - 40.
     cbor_w_map(&w, 5);
@@ -68,6 +69,8 @@ int main(void) {
 
     assert(cp.sensors[0].type == SENSOR_SDI12_AQUACHECK &&
            cp.sensors[0].gpio == 2 && cp.sensors[0].address == '0');
+    assert(cp.sensors[0].sample_interval_s == 600);   // per-sensor cadence parsed
+    assert(cp.sensors[1].sample_interval_s == 0);      // omitted -> 0 (follow global capture_s)
 
     assert(cp.sensors[1].type == SENSOR_ANALOG_LINEAR && cp.sensors[1].gpio == 26);
     assert(cp.sensors[1].kind == READING_SOIL_TEMPERATURE);

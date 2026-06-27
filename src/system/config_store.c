@@ -9,7 +9,7 @@
 #include "pico/flash.h"
 
 #define CFG_MAGIC   0x53564346u                                // 'SVCF'
-#define CFG_VERSION 4u                                          // bumped: LoRa last-signal fields + default pins 16/17
+#define CFG_VERSION 5u                                          // bumped: per-sensor sample_interval_s in the slot
 #define CFG_OFFSET  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE) // last 4 KB sector
 
 typedef struct {

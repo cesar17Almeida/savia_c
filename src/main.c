@@ -137,11 +137,13 @@ int main(void) {
         cfg_unlock();
 
         // 1. Decide what's due now. The sleep time is only the low-power tick;
-        //    the schedule forces the mandatory wakes. Before time is set we just
-        //    capture each cycle so we never sit idle without data.
+        //    the schedule forces the mandatory wakes, per sensor (each on its own
+        //    cadence). Before time is set we capture every sensor each cycle so we
+        //    never sit idle without data (all mask bits set).
         savia_sched_action_t act = timed
-            ? scheduler_tick(&sched, now_ms, live.capture_interval_s, live.daily_hour)
-            : (savia_sched_action_t){ .capture = true, .daily = false };
+            ? scheduler_tick(&sched, now_ms, live.sensors, live.sensor_count,
+                             live.capture_interval_s, live.daily_hour)
+            : (savia_sched_action_t){ .capture_mask = 0xFF, .daily = false };
 
         // Sync mock state if the app toggled it (re-seed the dataset on enable).
         if (live.mock_enabled && !mock_seeded) {
@@ -150,8 +152,9 @@ int main(void) {
             mock_seeded = false;
         }
 
-        // Acquire on the capture cadence: mock values or the real sensor.
-        if (act.capture) {
+        // Acquire whatever is due now: mock values, or only the real sensors whose
+        // own cadence elapsed this tick (act.capture_mask bit i == sensor i).
+        if (act.capture_mask) {
             if (live.mock_enabled) {
                 savia_reading_t r10 = { .ts_ms = now_ms, .port = 1, .depth_cm = 10,
                                         .kind = READING_SOIL_MOISTURE, .value = 0.70f };
@@ -164,6 +167,7 @@ int main(void) {
                 storage_append_reading(&rta);
             } else {
                 for (uint8_t i = 0; i < live.sensor_count; i++) {
+                    if (!(act.capture_mask & (1u << i))) continue;   // not due this tick
                     savia_reading_t buf[8];
                     int n = sensor_measure(&live.sensors[i], buf, 8);
                     for (int k = 0; k < n; k++) {
@@ -200,6 +204,7 @@ int main(void) {
         //    not discoverable until the button); disabled (default) we stay awake.
         uint32_t nap = timed
             ? scheduler_next_sleep_s(&sched, now_ms, live.sleep_seconds,
+                                     live.sensors, live.sensor_count,
                                      live.capture_interval_s, live.daily_hour)
             : live.sleep_seconds;
         savia_wake_reason_t why;

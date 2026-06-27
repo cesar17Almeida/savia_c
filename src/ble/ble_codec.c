@@ -401,7 +401,7 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
         bool is_analog  = s->type == SENSOR_ANALOG_LINEAR;
         bool is_1wire   = s->type == SENSOR_ONEWIRE_DS18B20;
         bool is_generic = s->type == SENSOR_SDI12_GENERIC;
-        uint8_t fields = 4;                          // port, gpio, type, addr
+        uint8_t fields = 5;                          // port, gpio, type, addr, interval_s
         if (is_analog || is_1wire) fields += 2;      // kind, depth_cm
         if (is_analog)  fields += 2;                 // scale, offset
         if (is_generic) fields += 1;                 // chan
@@ -412,6 +412,8 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
         cbor_w_textz(&w, "type"); cbor_w_textz(&w, sensor_type_str(s->type));
         char addr[2] = { s->address, 0 };
         cbor_w_textz(&w, "addr"); cbor_w_textz(&w, addr);
+        // per-sensor cadence (0 = follow the global capture_s); always sent so the app can show/edit it.
+        cbor_w_textz(&w, "interval_s"); cbor_w_uint(&w, s->sample_interval_s);
         if (is_analog || is_1wire) {
             cbor_w_textz(&w, "kind");     cbor_w_textz(&w, kind_str(s->kind));
             cbor_w_textz(&w, "depth_cm"); cbor_w_uint(&w, s->depth_cm);
@@ -477,8 +479,8 @@ size_t ble_serialize_pinmap(const station_config_t *cfg, uint8_t *out, size_t ca
     return w.overflow ? 0 : w.len;
 }
 
-// Parse one sensor entry {gpio, type, addr?, kind?, depth_cm?, scale?, offset?,
-// chan?:[{kind,depth_cm}]} into *slot. "port" and unknown keys are skipped. An
+// Parse one sensor entry {gpio, type, addr?, interval_s?, kind?, depth_cm?, scale?,
+// offset?, chan?:[{kind,depth_cm}]} into *slot. "port" and unknown keys are skipped. An
 // unknown type string yields SENSOR_NONE. Returns false only on malformed CBOR.
 static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot) {
     memset(slot, 0, sizeof(*slot));
@@ -513,6 +515,8 @@ static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot) {
             if (k >= 0) { slot->kind = (uint8_t) k; has_kind = true; }
         } else if (cbor_text_eq(fk, fkn, "depth_cm")) {
             if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->depth_cm = (uint8_t) v; }
+        } else if (cbor_text_eq(fk, fkn, "interval_s")) {
+            if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->sample_interval_s = (uint32_t) v; }
         } else if (cbor_text_eq(fk, fkn, "scale")) {
             double d; if (!cbor_r_double(r, &d)) return false; a_scale = (float) d;
         } else if (cbor_text_eq(fk, fkn, "offset")) {
