@@ -45,6 +45,8 @@ add_executable(savia_c
   src/system/device.c
   src/system/status_led.c    # onboard status LED (paired / BLE on / operating)
   src/system/clock.c
+  src/system/clock_store.c   # persist the sync ring (outage recovery) in flash
+  src/system/actuator.c      # digital-actuator slot state (BLE op "act")
   src/system/log.c
   src/system/inference.c
   src/system/weather.c       # TA forecast cache (LoRa downlink -> LSTM input)
@@ -59,7 +61,8 @@ add_executable(savia_c
   # codec: reusable encoders (also linked by the host tests)
   src/codec/cbor.c
   src/codec/sha256.c
-  src/codec/lora_codec.c     # LoRaWAN node payloads (downlink TA/clock, uplink)
+  src/codec/lora_codec.c     # LoRaWAN node payloads, wire v2 (typed up/downlinks + config TLV)
+  src/codec/sdi12_parse.c    # pure SDI-12 reply parsing (host-tested)
   # ble: peripheral, wire codec, auth
   src/ble/auth.c
   src/ble/ble_codec.c
@@ -77,6 +80,14 @@ target_compile_definitions(savia_c PRIVATE SAVIA_LOG_LEVEL=${SAVIA_LOG_LEVEL})
 # Nombre del binario según placa + ubicación de la inferencia, para no mezclarlos.
 if(SAVIA_ON_DEVICE_INFERENCE)
   target_compile_definitions(savia_c PRIVATE SAVIA_ON_DEVICE_INFERENCE=1)
+  # LSTM input prep (scaler + tensor build) only ships on the board that runs the
+  # model; off-device (RP2040) the app builds the tensors, so we skip these to
+  # save flash/RAM. Both are pure C and host-tested via test/run_host_tests.sh.
+  target_sources(savia_c PRIVATE
+    src/system/scaler.c          # StandardScaler constants (LSTM in/out)
+    src/system/lstm_input.c      # gather + build the LSTM tensors
+    src/system/inference_tflm.cpp # TFLM MicroInterpreter (C++), needs lib/pico-tflmicro
+  )
   set(SAVIA_VARIANT "${PICO_BOARD}-mlondevice")
   message(STATUS "savia_c: inferencia ON-device (TFLM) — requiere lib/pico-tflmicro")
 else()
@@ -94,6 +105,7 @@ target_link_libraries(savia_c
   pico_rand                 # get_rand_32 -> nonce del handshake auth
   hardware_uart             # LoRa Wio-E5 (comandos AT)
   hardware_pio              # timing de SDI-12
+  hardware_adc              # sensores analógicos (analog_linear, GP26-28)
 )
 
 # BLE peripheral vía BTstack sobre el CYW43439 (mismo chip en Pico WH y Pico 2 W).
@@ -116,6 +128,16 @@ if(SAVIA_ON_DEVICE_INFERENCE)
   if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/lib/pico-tflmicro/CMakeLists.txt)
     add_subdirectory(lib/pico-tflmicro)
     target_link_libraries(savia_c pico-tflmicro)
+    # pico-tflmicro drags in pico_multicore, which flips flash_safe_execute into
+    # "core-1 lockout required" mode -- and we never launch core 1, so every flash
+    # save fails with NOT_PERMITTED (-4). We are single-core: declare core 1 safe.
+    target_compile_definitions(savia_c PRIVATE PICO_FLASH_ASSUME_CORE1_SAFE=1)
+    # GCC 15 (arm-gnu-toolchain 15.x) dropped transitive <cstdint> includes, which
+    # the vendored flatbuffers headers rely on ('uint32_t does not name a type').
+    # Force-include stdint.h -- but ONLY for C/C++ TUs, never the .S assembly files
+    # the lib pulls from the SDK (the assembler chokes on C typedefs).
+    target_compile_options(pico-tflmicro PRIVATE
+      "$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include stdint.h>")
   else()
     message(WARNING "SAVIA_ON_DEVICE_INFERENCE=ON pero falta lib/pico-tflmicro (ver docs/BUILD.md)")
   endif()

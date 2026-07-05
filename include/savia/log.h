@@ -9,6 +9,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define SAVIA_LOG_DEBUG 0
 #define SAVIA_LOG_INFO  1
 #define SAVIA_LOG_WARN  2
@@ -42,5 +46,9 @@ void savia_log_set_clock(uint64_t (*now_ms)(bool *wall));
 // Ring accessors for the BLE log channel (data_request kind="logs").
 unsigned    savia_log_count(void);          // lines currently retained
 const char *savia_log_line(unsigned i);     // i: 0 = oldest retained .. count-1 = newest
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif
 
 #endif // SAVIA_LOG_H

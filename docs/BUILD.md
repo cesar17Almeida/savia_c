@@ -65,6 +65,24 @@ Mantener pulsado **BOOTSEL**, conectar el USB, y arrastrar el `.uf2` a la unidad
   RAM; por eso la combinación recomendada para el RP2040 es `OFF`.
 - TFLM (`lib/pico-tflmicro`) solo se enlaza con `SAVIA_ON_DEVICE_INFERENCE=ON`.
 
+## Inferencia on-device: qué queda por cablear (RP2350)
+
+El pipeline de datos ya está **completo y probado en host** (`scaler.c`, `lstm_input.c`,
+`inference_run_daily()` en `inference.c`, test `test_inference.c`). Lo que falta son
+los tres pasos que dependen de la placa/artefactos y no se pueden compilar sin ellos:
+
+1. **Añadir la lib** `lib/pico-tflmicro` (submódulo). El `CMakeLists.txt` ya la enlaza
+   condicionalmente cuando `SAVIA_ON_DEVICE_INFERENCE=ON`.
+2. **Embeber el modelo**: `sh tools/embed_model.sh` genera
+   `include/savia/lstm_hs30_int8_model.h` con `g_lstm_hs30_model[]` desde
+   `lstm_hs30_int8.tflite`.
+3. **Rellenar `inference_run()`** en `src/system/inference.c` con el `MicroInterpreter`
+   (la receta exacta —set de tensores, cuantización int8, `Invoke()`, dequant— está en
+   los comentarios de esa función). Arena medida ≈200 KB.
+
+El **disparador está comentado a propósito** en `src/main.c` (`// inference_run_daily(now_ms);`):
+descoméntalo cuando los tres pasos anteriores estén hechos para correrlo en el ciclo diario.
+
 ## Tests de host (sin SDK, sin placa)
 
 La lógica pura (config, y a futuro codecs/parsers/agregación) se compila y testea
