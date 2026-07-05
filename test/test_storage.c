@@ -87,6 +87,24 @@ int main(void) {
     assert(storage_count_pred(0, UINT64_MAX) == 0);
     printf("test_storage: clear OK\n");
 
+    // --- provisional back-fill: uptime-stamped rows get rebased, epoch rows don't ---
+    storage_clear();
+    savia_reading_t pr = { .port = 1, .depth_cm = 10, .kind = READING_SOIL_MOISTURE };
+    pr.ts_ms = 45000;              pr.value = 0.5f; storage_append_reading(&pr);   // captured at uptime 45 s
+    pr.ts_ms = 3645000;            pr.value = 0.6f; storage_append_reading(&pr);   // captured at uptime ~1 h
+    pr.ts_ms = hour0 + 1000;       pr.value = 0.7f; storage_append_reading(&pr);   // already wall-stamped
+    assert(pr.ts_ms >= SAVIA_TS_PROVISIONAL_MAX);   // sanity: epoch is above the threshold
+    // Sync at uptime 100 s -> epoch H: delta = H - 100000 (what clock.c keeps as base).
+    uint64_t delta = H - 100000ULL;
+    assert(storage_rebase_provisional(delta) == 2);                    // only the 2 provisional rows
+    savia_reading_t ro[4];
+    assert(storage_query_raw(0, UINT64_MAX, 0, ro, 4) == 3);
+    assert(ro[0].ts_ms == 45000 + delta);                              // uptime + base = wall capture time
+    assert(ro[1].ts_ms == 3645000 + delta);
+    assert(ro[2].ts_ms == hour0 + 1000);                               // untouched
+    assert(storage_rebase_provisional(delta) == 0);                    // idempotent: nothing left to fix
+    printf("test_storage: provisional back-fill OK\n");
+
     printf("test_storage: OK\n");
     return 0;
 }

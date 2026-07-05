@@ -43,6 +43,17 @@ bool storage_append_reading(const savia_reading_t *r) {
     return true;
 }
 
+size_t storage_rebase_provisional(uint64_t delta_ms) {
+    size_t idx = ring_start(s_rd_count, s_rd_head, READINGS_CAP);
+    size_t n = 0;
+    for (size_t i = 0; i < s_rd_count; i++) {
+        savia_reading_t *e = &s_rd[idx];
+        idx = (idx + 1) % READINGS_CAP;
+        if (e->ts_ms < SAVIA_TS_PROVISIONAL_MAX) { e->ts_ms += delta_ms; n++; }
+    }
+    return n;
+}
+
 bool storage_upsert_reading(const savia_reading_t *r, bool *created) {
     size_t idx = ring_start(s_rd_count, s_rd_head, READINGS_CAP);
     for (size_t i = 0; i < s_rd_count; i++) {

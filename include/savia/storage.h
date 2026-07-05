@@ -14,8 +14,18 @@
 void storage_init(void);
 void storage_clear(void);   // wipe all readings + predictions (dev "clear data")
 
+// Any ts below this is uptime-relative ("provisional": captured before the clock
+// was synced), never a real epoch (threshold ~ March 1973). See storage_rebase_provisional.
+#define SAVIA_TS_PROVISIONAL_MAX 100000000000ULL
+
 // --- Readings ---
 bool   storage_append_reading(const savia_reading_t *r);
+
+// Back-fill provisional readings after the first clock sync of this power cycle:
+// adds `delta_ms` (= epoch - uptime at sync) to every reading with a provisional
+// ts, turning capture-time uptime stamps into the wall time clock_now() would
+// have produced. Returns how many readings were rebased.
+size_t storage_rebase_provisional(uint64_t delta_ms);
 
 // Upsert by identity (ts_ms, port, kind, depth_cm): if a matching reading exists
 // its value is overwritten and *created=false; otherwise the reading is appended
