@@ -31,7 +31,20 @@ int main(void) {
     assert(cfg.sensors[1].type == SENSOR_NONE);
     assert(cfg.lora_enabled == false);
     assert(cfg.lora_uart_tx_gpio == 16 && cfg.lora_uart_rx_gpio == 17);
+    assert(cfg.lora_period_s == 3600);      // 1 h default LoRa cycle
     assert(cfg.lora_last_signal_ms == 0);   // no signal persisted yet
+
+    // Mode + schedule extensions (v7): FORWARD by default, local-time fields,
+    // informative irrigation at 06:00, no coords until the installer sets them.
+    assert(cfg.inference_mode == SAVIA_INFER_FORWARD);
+    assert(cfg.utc_offset_min == 0);
+    assert(cfg.irrigation_hour == 6);
+    assert(cfg.has_coords == false);
+    // Slot extensions: gpio2 unused on every slot (0 would mean GP0), empty unit.
+    for (int i = 0; i < SAVIA_MAX_SENSORS; i++) {
+        assert(cfg.sensors[i].gpio2 == SAVIA_GPIO_NONE);
+        assert(cfg.sensors[i].unit[0] == 0);
+    }
 
     printf("test_config: OK (config defaults)\n");
     return 0;

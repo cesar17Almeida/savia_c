@@ -9,7 +9,7 @@
 #include "pico/flash.h"
 
 #define CFG_MAGIC   0x53564346u                                // 'SVCF'
-#define CFG_VERSION 5u                                          // bumped: per-sensor sample_interval_s in the slot
+#define CFG_VERSION 7u   // bumped: inference_mode, utc_offset_min, irrigation_hour, coords, slot gpio2+unit
 #define CFG_OFFSET  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE) // last 4 KB sector
 
 typedef struct {
@@ -20,9 +20,14 @@ typedef struct {
     uint32_t crc;              // crc32 over [magic .. cfg]
 } cfg_record_t;
 
-// do_save programs exactly one flash page; the record must fit or it is silently
-// truncated and the CRC check then rejects every load.
-_Static_assert(sizeof(cfg_record_t) <= FLASH_PAGE_SIZE, "cfg_record_t exceeds one flash page");
+// The config lives in one 4 KB erase sector. Erase is per-sector but PROGRAM is per
+// 256 B page, so the record may grow up to the whole sector -- we just program as
+// many pages as it needs (CFG_PROG_LEN). It must fit the sector or it is truncated
+// and the CRC then rejects every load.
+_Static_assert(sizeof(cfg_record_t) <= FLASH_SECTOR_SIZE, "cfg_record_t exceeds one flash sector");
+
+// Bytes actually programmed: the record rounded up to a whole number of 256 B pages.
+#define CFG_PROG_LEN (((sizeof(cfg_record_t) + FLASH_PAGE_SIZE - 1) / FLASH_PAGE_SIZE) * FLASH_PAGE_SIZE)
 
 static uint32_t crc32(const uint8_t *p, size_t n) {
     uint32_t c = 0xffffffffu;
@@ -44,7 +49,7 @@ bool config_store_load(station_config_t *cfg) {
 
 // Runs with interrupts disabled (via flash_safe_execute): no logging here.
 static void do_save(void *param) {
-    static uint8_t page[FLASH_PAGE_SIZE];       // record fits one 256 B page
+    static uint8_t page[CFG_PROG_LEN];          // record rounded up to whole 256 B pages
     cfg_record_t *rec = (cfg_record_t *) page;
     memset(page, 0xff, sizeof(page));
     rec->magic = CFG_MAGIC;
@@ -53,7 +58,7 @@ static void do_save(void *param) {
     memcpy(&rec->cfg, (const station_config_t *) param, sizeof(rec->cfg));
     rec->crc = crc32((const uint8_t *) rec, offsetof(cfg_record_t, crc));
     flash_range_erase(CFG_OFFSET, FLASH_SECTOR_SIZE);
-    flash_range_program(CFG_OFFSET, page, FLASH_PAGE_SIZE);
+    flash_range_program(CFG_OFFSET, page, CFG_PROG_LEN);
 }
 
 void config_store_save(const station_config_t *cfg) {

@@ -23,6 +23,27 @@
 #define SAVIA_SLEEP_MAX_S 86400u
 // Minimum capture cadence (the AquaCheck probe needs >= 60 s between reads).
 #define SAVIA_CAPTURE_MIN_S 60u
+// Accepted range for the app-set LoRa cycle period (each cycle = one uplink + the
+// time/TA downlink), seconds: 5 min .. 24 h. The floor keeps a hourly-ish cadence
+// comfortably inside the EU868 ~1% duty cycle even with a big downlink at SF12.
+#define SAVIA_LORA_PERIOD_MIN_S 300u
+#define SAVIA_LORA_PERIOD_MAX_S 86400u
+
+// Accepted range for the UTC offset (minutes): UTC-12:00 .. UTC+14:00.
+#define SAVIA_UTC_OFFSET_MIN (-720)
+#define SAVIA_UTC_OFFSET_MAX 840
+
+// Where the daily LSTM runs (runtime choice, app-editable; LOCAL additionally
+// requires an on-device build -- see inference_on_device()).
+typedef enum {
+    SAVIA_INFER_FORWARD = 0,   // data store: serve/upload inputs, infer elsewhere
+    SAVIA_INFER_LOCAL   = 1,   // edge: run the LSTM on this station
+} savia_inference_mode_t;
+
+// Sentinel for an unused second data pin in a sensor slot (HC-SR04 echo).
+#define SAVIA_GPIO_NONE 0xFF
+// Max unit label per slot, incl. NUL ("mm", "%RH", "°C"...).
+#define SAVIA_UNIT_MAX 9
 
 // Sensor catalog. A sensor is interface + protocol + decoding -- a free GPIO is
 // necessary but not sufficient -- so the app picks a TYPE the firmware supports
@@ -38,6 +59,9 @@ typedef enum {
     SENSOR_SDI12_GENERIC,      // any SDI-12 sensor; installer maps each value index
     SENSOR_ANALOG_LINEAR,      // dumb analog on an ADC pin: value = scale*raw + offset
     SENSOR_ONEWIRE_DS18B20,    // 1-Wire digital thermometer (self-identifying, degC)
+    SENSOR_DHT11,              // DHT11 combo: air temperature + relative humidity, 1 pin
+    SENSOR_HCSR04,             // HC-SR04 ultrasound: gpio=trigger, gpio2=echo -> mm
+    SENSOR_ACTUATOR_DIGITAL,   // digital OUTPUT (valve/relay); app-controlled, OFF at boot
 } savia_sensor_type_t;
 
 // Installer-supplied meaning of one returned value: which reading kind it is and,
@@ -56,9 +80,11 @@ typedef struct {
 typedef struct {
     savia_sensor_type_t type;
     uint8_t gpio;        // data GPIO (SDI-12/1-Wire via level shifter; analog = ADC pin)
+    uint8_t gpio2;       // second data GPIO (HC-SR04 echo); SAVIA_GPIO_NONE = unused
     char    address;     // SDI-12 address, e.g. '0' (ignored for analog / 1-Wire)
     uint8_t kind;        // savia_reading_kind_t for the analog / 1-Wire value
     uint8_t depth_cm;    // depth for that value (0 = none)
+    char    unit[SAVIA_UNIT_MAX];  // display unit label; "" = implied by kind
     uint32_t sample_interval_s;  // per-sensor capture cadence (s); 0 = use the global capture_interval_s
     union {
         struct { float scale, offset; } analog;   // SENSOR_ANALOG_LINEAR
@@ -82,7 +108,16 @@ typedef struct {
 
     // --- Schedule (mandatory wakes, independent of sleep_seconds) ---
     uint32_t capture_interval_s;   // sensor capture cadence, e.g. 3600 (hourly)
-    uint8_t  daily_hour;           // UTC hour (0..23) for the daily cycle / inference
+    uint8_t  daily_hour;           // LOCAL hour (0..23) for the daily cycle / inference
+    int16_t  utc_offset_min;       // local = UTC + offset (app sets it from the phone)
+    uint8_t  irrigation_hour;      // LOCAL hour (0..23) irrigation happens; informative only
+
+    // --- Operation mode ---
+    uint8_t  inference_mode;       // savia_inference_mode_t (default FORWARD)
+
+    // --- Site coordinates (installer-set; backend uses them for Open-Meteo TA) ---
+    bool     has_coords;
+    int32_t  lat_e7, lon_e7;       // degrees x 1e-7
 
     // --- Dev / diagnostics ---
     bool    mock_enabled;          // generate mock readings instead of the real sensor
@@ -96,9 +131,10 @@ typedef struct {
     uint8_t sensor_count;
 
     // --- LoRa (Wio-E5 over UART) ---
-    bool    lora_enabled;
-    uint8_t lora_uart_tx_gpio;
-    uint8_t lora_uart_rx_gpio;
+    bool     lora_enabled;
+    uint8_t  lora_uart_tx_gpio;
+    uint8_t  lora_uart_rx_gpio;
+    uint32_t lora_period_s;   // seconds between LoRa cycles; app-editable (see range above)
 
     // --- LoRa last-known downlink signal (persisted runtime state, NOT a user
     // setting; not in the …0013 snapshot -- served via status …0010 and seeded

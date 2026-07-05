@@ -16,9 +16,18 @@ void config_load_defaults(station_config_t *cfg) {
     cfg->wake_button_gpio = 15;
     cfg->deep_sleep_enabled = false;
 
-    // Schedule: capture hourly, daily cycle at 20:00 UTC (overrides a long sleep).
+    // Schedule: capture hourly, daily cycle (inference) at 20:00 LOCAL time --
+    // Antonio's forecast loop starts at 20:00. Irrigation at 06:00 (informative).
+    // utc_offset_min 0 until the app/backend sets it (local == UTC out of the box).
     cfg->capture_interval_s = 3600;
     cfg->daily_hour = 20;
+    cfg->utc_offset_min = 0;
+    cfg->irrigation_hour = 6;
+
+    // Mode: FORWARD (data store) -- safe on any board; the app can switch to LOCAL
+    // on builds where inference_on_device() is true.
+    cfg->inference_mode = SAVIA_INFER_FORWARD;
+    cfg->has_coords = false;       // installer sets coords from the app
 
     // Dev: mock data ON during bring-up; INFO logs.
     cfg->mock_enabled = true;
@@ -32,10 +41,13 @@ void config_load_defaults(station_config_t *cfg) {
     cfg->sensors[0].gpio = 2;
     cfg->sensors[0].address = '0';
     cfg->sensor_count = 1;
+    // gpio2 is "unused" (0xFF) on every slot; memset(0) above would leave 0 = GP0.
+    for (int i = 0; i < SAVIA_MAX_SENSORS; i++) cfg->sensors[i].gpio2 = SAVIA_GPIO_NONE;
 
     // LoRa off by default (the app enables it / pings on demand). Default pins are
     // the field wiring: Wio-E5 on UART0 GP16(TX)/GP17(RX). Last-signal fields zeroed.
     cfg->lora_enabled = false;
     cfg->lora_uart_tx_gpio = 16;
     cfg->lora_uart_rx_gpio = 17;
+    cfg->lora_period_s = 3600;   // 1 h; a private gateway + paid plan lift the TTN FUP
 }
