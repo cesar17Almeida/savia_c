@@ -27,6 +27,8 @@
 #include "savia/storage.h"
 #include "savia/clock.h"
 #include "savia/protocol.h"
+#include "savia/inference.h"   // inference_on_device(): gates LOCAL mode + infer_dev
+#include "savia/sdi12.h"       // probe console result (op "sdi12")
 #include "savia/log.h"
 
 // --- generated ATT handles --------------------------------------------------
@@ -93,6 +95,12 @@ static bool     g_config_dirty;          // set on write, drained by the supervi
 static bool     g_lora_ping_pending;     // app asked for a LoRa ping; supervisor runs it
 static bool     g_at_pending;            // app queued a raw AT command (terminal)
 static char     g_at_cmd[SAVIA_AT_CMD_MAX];
+static bool     g_sdi12_pending;         // app queued a raw SDI-12 probe command
+static char     g_sdi12_cmd[SDI12_CMD_MAX];
+static uint8_t  g_sdi12_gpio;
+static bool     g_act_pending;           // app asked to switch an actuator slot
+static uint8_t  g_act_port;
+static bool     g_act_on;
 static uint8_t  g_cfg_ack[64];
 static size_t   g_cfg_ack_len;
 static bool     g_cfg_ack_pending;       // ack waiting for a CAN_SEND_NOW slot
@@ -212,6 +220,25 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
         static lora_at_result_t atr;                  // ~650 B -> keep off the stack
         lora_get_at_result(&atr);
         g_resp_len = ble_serialize_at_result(&atr, g_resp, sizeof(g_resp));
+    } else if (strcmp(dr.op, SAVIA_OP_SDI12) == 0) { // raw probe console: queue + last result
+        if (dr.has_cmd && dr.cmd[0] && dr.has_gpio) {
+            strncpy(g_sdi12_cmd, dr.cmd, sizeof g_sdi12_cmd - 1);
+            g_sdi12_cmd[sizeof g_sdi12_cmd - 1] = '\0';
+            g_sdi12_gpio = dr.gpio;
+            g_sdi12_pending = true;
+            LOG_INFO("BLE: SDI-12 queued: %s (GP%u)\n", g_sdi12_cmd, g_sdi12_gpio);
+        }
+        sdi12_console_result_t sr;
+        sdi12_get_console_result(&sr);
+        g_resp_len = ble_serialize_sdi12_result(&sr, g_resp, sizeof(g_resp));
+    } else if (strcmp(dr.op, SAVIA_OP_ACT) == 0) {   // actuator switch request
+        if (dr.has_port && dr.has_on) {
+            g_act_port = dr.port;
+            g_act_on = dr.on;
+            g_act_pending = true;
+            LOG_INFO("BLE: act queued: port %u -> %s\n", dr.port, dr.on ? "ON" : "OFF");
+        }
+        g_resp_len = ble_serialize_count(1, g_resp, sizeof(g_resp));   // queued ack
     } else {  // GET
         if (strcmp(dr.kind, SAVIA_KIND_RAW) == 0) {
             size_t n = storage_query_raw(from, to, lim, q_rd, sizeof(q_rd) / sizeof(q_rd[0]));
@@ -285,6 +312,42 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
             if (cp.log_level > SAVIA_LOG_WARN) {
                 ok = false; err = "log_level out of range";
             } else next.log_level = cp.log_level;
+        }
+        if (ok && cp.has_lora_period_s) {
+            if (cp.lora_period_s < SAVIA_LORA_PERIOD_MIN_S ||
+                cp.lora_period_s > SAVIA_LORA_PERIOD_MAX_S) {
+                ok = false; err = "lora_period_s out of range";
+            } else next.lora_period_s = cp.lora_period_s;
+        }
+        if (ok && cp.has_inference_mode) {
+            if (cp.inference_mode == SAVIA_INFER_LOCAL && !inference_on_device()) {
+                ok = false; err = "no_local_inference";   // app gates on infer_dev
+            } else next.inference_mode = cp.inference_mode;
+        }
+        if (ok && cp.has_utc_offset) {
+            if (cp.utc_offset_min < SAVIA_UTC_OFFSET_MIN ||
+                cp.utc_offset_min > SAVIA_UTC_OFFSET_MAX) {
+                ok = false; err = "utc_offset out of range";
+            } else next.utc_offset_min = cp.utc_offset_min;
+        }
+        if (ok && cp.has_irrigation_hour) {
+            if (cp.irrigation_hour > 23) {
+                ok = false; err = "irrigation_hour out of range";
+            } else next.irrigation_hour = cp.irrigation_hour;
+        }
+        if (ok && (cp.has_lat || cp.has_lon)) {
+            if (cp.lat_null || cp.lon_null) {
+                next.has_coords = false;                  // null clears the pair
+            } else if (cp.has_lat && cp.has_lon) {
+                if (cp.lat_e7 < -900000000 || cp.lat_e7 > 900000000 ||
+                    cp.lon_e7 < -1800000000 || cp.lon_e7 > 1800000000) {
+                    ok = false; err = "coords out of range";
+                } else {
+                    next.lat_e7 = cp.lat_e7;
+                    next.lon_e7 = cp.lon_e7;
+                    next.has_coords = true;
+                }
+            } else { ok = false; err = "coords need lat+lon"; }
         }
         if (ok && cp.has_sensors) {
             // A per-sensor cadence (0 = follow capture_s) must sit in the same range
@@ -399,7 +462,7 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
         uint8_t tmp[192];   // +lora{} block
         uint32_t up_s = (uint32_t)(to_ms_since_boot(get_absolute_time()) / 1000);
         lora_status_t ls; lora_get_status(&ls);
-        size_t n = ble_serialize_status(up_s, clock_last_sync_ms(),
+        size_t n = ble_serialize_status(g_cfg, up_s, clock_last_sync_ms(),
                                         g_weather_updated_ms, &ls, tmp, sizeof(tmp));
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
     }
@@ -407,7 +470,8 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
         // Worst case ~1.2 KB: 6 generic SDI-12 slots x 4 channels each carry their
         // chan[] maps; a 512 B buffer would overflow -> serialize returns 0 -> empty read.
         static uint8_t tmp[2048];   // snapshot: device identity + settings + sensors
-        size_t n = ble_serialize_config(savia_device_id(), g_cfg, tmp, sizeof(tmp));
+        size_t n = ble_serialize_config(savia_device_id(), g_cfg, inference_on_device(),
+                                        tmp, sizeof(tmp));
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
     }
     if (att_handle == H_AUTH) {
@@ -443,8 +507,15 @@ static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_m
     } else if (att_handle == H_TIME_SYNC) {
         uint64_t ms;
         if (ble_parse_time_sync(buffer, buffer_size, &ms)) {
-            clock_set(ms, to_ms_since_boot(get_absolute_time()));
-            LOG_INFO("BLE: time_sync -> %llu ms\n", (unsigned long long) ms);
+            uint64_t outage = 0;
+            if (clock_apply_sync(ms, to_ms_since_boot(get_absolute_time()),
+                                 CLOCK_SRC_BLE, &outage)) {
+                LOG_INFO("BLE: time_sync -> %llu ms\n", (unsigned long long) ms);
+                if (outage >= CLOCK_OUTAGE_WARN_MS)
+                    LOG_WARN("clock: board was powered off ~%llu min (BLE sync)\n",
+                             (unsigned long long) (outage / 60000ULL));
+            } else LOG_INFO("BLE: time_sync %llu implausible, ignored\n",
+                            (unsigned long long) ms);
         } else LOG_INFO("BLE: bad time_sync\n");
     } else if (att_handle == H_WEATHER) {
         if (ble_parse_weather(buffer, buffer_size)) {
@@ -494,6 +565,8 @@ static void packet_handler(uint8_t type, uint16_t channel, uint8_t *packet, uint
             g_cfg_ack_pending = false;
             g_lora_ping_pending = false;   // a queued ping dies with the client that asked
             g_at_pending = false;
+            g_sdi12_pending = false;
+            g_act_pending = false;
             g_resp_seq = g_resp_total = 0;
             LOG_INFO("BLE: disconnected\n");
             break;
@@ -591,6 +664,26 @@ bool ble_take_lora_at(char *cmd, size_t cap) {
 
 bool ble_lora_at_pending(void) { return g_at_pending; }
 
+bool ble_take_sdi12(char *cmd, size_t cap, uint8_t *gpio) {
+    if (!g_sdi12_pending) return false;
+    g_sdi12_pending = false;
+    if (cmd && cap) { strncpy(cmd, g_sdi12_cmd, cap - 1); cmd[cap - 1] = '\0'; }
+    if (gpio) *gpio = g_sdi12_gpio;
+    return true;
+}
+
+bool ble_sdi12_pending(void) { return g_sdi12_pending; }
+
+bool ble_take_act(uint8_t *port, bool *on) {
+    if (!g_act_pending) return false;
+    g_act_pending = false;
+    if (port) *port = g_act_port;
+    if (on) *on = g_act_on;
+    return true;
+}
+
+bool ble_act_pending(void) { return g_act_pending; }
+
 bool ble_is_connected(void) { return g_con != HCI_CON_HANDLE_INVALID; }
 bool ble_is_advertising(void) { return g_advertising; }
 
@@ -603,6 +696,10 @@ bool ble_take_lora_ping(void) { return false; }
 bool ble_lora_ping_pending(void) { return false; }
 bool ble_take_lora_at(char *cmd, size_t cap) { (void) cmd; (void) cap; return false; }
 bool ble_lora_at_pending(void) { return false; }
+bool ble_take_sdi12(char *cmd, size_t cap, uint8_t *gpio) { (void) cmd; (void) cap; (void) gpio; return false; }
+bool ble_sdi12_pending(void) { return false; }
+bool ble_take_act(uint8_t *port, bool *on) { (void) port; (void) on; return false; }
+bool ble_act_pending(void) { return false; }
 void ble_radio_suspend(void) { }
 void ble_radio_resume(void) { }
 bool ble_is_connected(void) { return false; }

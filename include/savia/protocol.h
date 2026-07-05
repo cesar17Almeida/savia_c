@@ -28,6 +28,8 @@
 #define SAVIA_OP_INGEST_OK   "ingest_ok"  // ack: {created,updated}
 #define SAVIA_OP_LORA        "lora"       // trigger an on-demand LoRa ping (join+uplink); result lands in status
 #define SAVIA_OP_AT          "at"         // raw AT terminal: {cmd?} queues a command, returns {seq,cmd,lines}
+#define SAVIA_OP_SDI12       "sdi12"      // raw SDI-12 console: {cmd,gpio} queues, returns {seq,cmd,lines}
+#define SAVIA_OP_ACT         "act"        // drive a digital actuator slot: {port,on} (auth-gated)
 #define SAVIA_OP_INFER       "infer"
 #define SAVIA_OP_INFER_DONE  "infer_done"
 #define SAVIA_OP_SET         "set"

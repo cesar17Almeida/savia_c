@@ -166,11 +166,13 @@ int main(void) {
     write_file("/tmp/savia_preds.cbor", buf, l);
 
     // --- status + count (with a LoRa link block) ---
+    station_config_t cfg;
+    config_load_defaults(&cfg);            // FORWARD mode, irrigation 06:00
     lora_status_t lst = { .inited = true, .joined = true, .has_signal = true,
                           .rssi_dbm = -106, .snr_ddb = 70,
                           .last_signal_ms = 1700000000000ULL,
                           .module = "v4.0.11", .seq = 3 };
-    l = ble_serialize_status(12345, 1700000000000ULL, 0, &lst, buf, sizeof(buf));
+    l = ble_serialize_status(&cfg, 12345, 1700000000000ULL, 0, &lst, buf, sizeof(buf));
     assert(l > 0);
     write_file("/tmp/savia_status.cbor", buf, l);
     l = ble_serialize_count(42, buf, sizeof(buf));
@@ -178,11 +180,14 @@ int main(void) {
     write_file("/tmp/savia_count.cbor", buf, l);
 
     // --- config snapshot (device card + sleep + sensors + gpio map) + ack ---
-    station_config_t cfg;
-    config_load_defaults(&cfg);
+    // Exercise the new v7 fields in the snapshot: coords set + a slot with
+    // gpio2/unit, so the crosscheck sees them on the wire.
+    cfg.has_coords = true;
+    cfg.lat_e7 = 394699750;                // 39.4699750 (Valencia)
+    cfg.lon_e7 = -3762881;                 // -0.3762881
     savia_device_id_t dev = { .model = "Raspberry Pi Pico WH", .mcu = "RP2040",
                               .fw = "0.1.0-c" };
-    l = ble_serialize_config(&dev, &cfg, buf, sizeof(buf));
+    l = ble_serialize_config(&dev, &cfg, false, buf, sizeof(buf));
     assert(l > 0);
     write_file("/tmp/savia_config.cbor", buf, l);
     l = ble_serialize_config_ack(true, 300, true, NULL, buf, sizeof(buf));

@@ -4,6 +4,7 @@
 #define SAVIA_BLE_CODEC_H
 
 #include "savia/types.h"
+#include "savia/sdi12.h"
 #include "savia/config.h"
 #include "savia/device.h"
 #include "savia/lora.h"
@@ -20,7 +21,8 @@ size_t ble_serialize_aggregations(const savia_aggregate_t *rows, size_t n,
                                   uint8_t *out, size_t cap); // [{hour_ms,port,kind,count,mean,min,max,depth_cm}]
 size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
                                  uint8_t *out, size_t cap);  // [{ts_ms,model,kind,port,value,confidence}]
-size_t ble_serialize_status(uint32_t uptime_s, uint64_t last_sync_ms,
+size_t ble_serialize_status(const station_config_t *cfg,
+                            uint32_t uptime_s, uint64_t last_sync_ms,
                             uint64_t weather_updated_ms, const lora_status_t *lora,
                             uint8_t *out, size_t cap);
 size_t ble_serialize_count(uint64_t count, uint8_t *out, size_t cap);  // {count:N}
@@ -49,11 +51,18 @@ typedef struct {
     bool     has_from;  uint64_t from_ms;
     bool     has_to;    uint64_t to_ms;
     bool     has_limit; uint64_t limit;
-    bool     has_cmd;   char     cmd[SAVIA_AT_CMD_MAX];   // raw AT command (op:"at")
+    bool     has_cmd;   char     cmd[SAVIA_AT_CMD_MAX];   // raw command (op:"at"/"sdi12")
+    bool     has_gpio;  uint8_t  gpio;                    // probe data pin (op:"sdi12")
+    bool     has_port;  uint8_t  port;                    // actuator slot port (op:"act")
+    bool     has_on;    bool     on;                      // actuator target state (op:"act")
 } ble_data_request_t;
 
 // Serialize the last raw AT exchange (op:"at" response): {seq, cmd, lines:[...]}.
 size_t ble_serialize_at_result(const lora_at_result_t *r, uint8_t *out, size_t cap);
+
+// Serialize the last SDI-12 console exchange (op:"sdi12" response), same shape.
+size_t ble_serialize_sdi12_result(const sdi12_console_result_t *r,
+                                  uint8_t *out, size_t cap);
 
 bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *out);
 
@@ -70,8 +79,10 @@ size_t ble_serialize_ingest_ok(size_t created, size_t updated, uint8_t *out, siz
 
 // Serialize the config snapshot (config READ): static device identity + settings
 // + sensors[]. Liveness (uptime/last_sync) lives in the `status` characteristic.
+// `infer_dev` is the build capability (inference_on_device()) so the app can gate
+// the LOCAL mode toggle.
 size_t ble_serialize_config(const savia_device_id_t *dev,
-                            const station_config_t *cfg,
+                            const station_config_t *cfg, bool infer_dev,
                             uint8_t *out, size_t cap);
 
 // Parsed config patch (config WRITE: {v, op:"set", sleep_s?}). Extend with more
@@ -87,6 +98,14 @@ typedef struct {
     bool     has_daily_hour;  uint8_t  daily_hour;
     bool     has_mock;        bool     mock;
     bool     has_log_level;   uint8_t  log_level;
+    bool     has_lora_period_s; uint32_t lora_period_s;
+    bool     has_inference_mode; uint8_t inference_mode;   // savia_inference_mode_t
+    bool     has_utc_offset;  int16_t  utc_offset_min;
+    bool     has_irrigation_hour; uint8_t irrigation_hour;
+    // Coords: number sets, null clears. Both must travel together to SET; either
+    // null clears the pair (validated in the write path).
+    bool     has_lat; bool lat_null; int32_t lat_e7;
+    bool     has_lon; bool lon_null; int32_t lon_e7;
     // Full replacement of the sensor table (a sparse patch that omits "sensors"
     // leaves the slots untouched). Validated server-side via pinmap_check_sensors.
     bool     has_sensors;     uint8_t  sensor_count;

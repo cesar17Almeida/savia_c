@@ -29,6 +29,16 @@ bool ble_lora_ping_pending(void);
 bool ble_take_lora_at(char *cmd, size_t cap);
 bool ble_lora_at_pending(void);
 
+// SDI-12 console: take the queued raw probe command + its data GPIO. The
+// supervisor runs the (blocking) transaction outside the BLE callback context.
+bool ble_take_sdi12(char *cmd, size_t cap, uint8_t *gpio);
+bool ble_sdi12_pending(void);
+
+// Actuator: take the queued {port, on} request. The supervisor validates the
+// slot type and drives the GPIO (only SENSOR_ACTUATOR_DIGITAL switches).
+bool ble_take_act(uint8_t *port, bool *on);
+bool ble_act_pending(void);
+
 // Power the radio down / back up around a real deep-sleep interval. suspend()
 // stops advertising and deinits the CYW43 (the dominant consumer); resume()
 // brings the stack + advertising back. No-ops when BLE is compiled out.
