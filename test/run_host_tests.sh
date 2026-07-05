@@ -20,7 +20,7 @@ echo "== 1b) pinmap test =="
 
 echo ""
 echo "== 1c) sensors config test (parse + atomic validation + serialize) =="
-"$CC" $CFLAGS test/test_sensors.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c -o /tmp/savia_test_sensors
+"$CC" $CFLAGS test/test_sensors.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c src/system/actuator.c -o /tmp/savia_test_sensors
 /tmp/savia_test_sensors
 
 echo ""
@@ -29,8 +29,13 @@ echo "== 2) storage + clock test =="
 /tmp/savia_test_storage
 
 echo ""
+echo "== 2a) inference input pipeline test (scaler + gather + tensors) =="
+"$CC" $CFLAGS test/test_inference.c src/system/scaler.c src/system/lstm_input.c src/storage/storage_flash.c src/system/weather.c -o /tmp/savia_test_inference -lm
+/tmp/savia_test_inference
+
+echo ""
 echo "== 2b) scheduler test =="
-"$CC" $CFLAGS test/test_scheduler.c src/power/scheduler.c -o /tmp/savia_test_sched
+"$CC" $CFLAGS test/test_scheduler.c src/power/scheduler.c src/system/config.c -o /tmp/savia_test_sched
 /tmp/savia_test_sched
 
 echo ""
@@ -40,8 +45,18 @@ echo "== 2c) sha256 + auth test =="
 
 echo ""
 echo "== 2d) LoRa codec test =="
-"$CC" $CFLAGS test/test_lora_codec.c src/codec/lora_codec.c -o /tmp/savia_test_lora
+"$CC" $CFLAGS test/test_lora_codec.c src/codec/lora_codec.c src/system/config.c -o /tmp/savia_test_lora
 /tmp/savia_test_lora
+
+echo ""
+echo "== 2e) clock test (running clock + sync ring + validation + outage) =="
+"$CC" $CFLAGS test/test_clock.c src/system/clock.c -o /tmp/savia_test_clock
+/tmp/savia_test_clock
+
+echo ""
+echo "== 2f) SDI-12 reply parser test =="
+"$CC" $CFLAGS test/test_sdi12_parse.c src/codec/sdi12_parse.c -o /tmp/savia_test_sdi12
+/tmp/savia_test_sdi12
 
 echo ""
 echo "== 3) BLE codec test + cross-check vs savia_py =="
@@ -50,7 +65,7 @@ if [ ! -x "$PYTHON" ]; then
   echo "  !! falta $PYTHON (venv de savia_py con cbor2); salto el cross-check"
 else
   "$PYTHON" test/crosscheck_ble_codec.py gen
-  "$CC" $CFLAGS test/test_ble_codec.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c -o /tmp/savia_test_ble
+  "$CC" $CFLAGS test/test_ble_codec.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c src/system/actuator.c -o /tmp/savia_test_ble
   /tmp/savia_test_ble
   "$PYTHON" test/crosscheck_ble_codec.py check
 fi
