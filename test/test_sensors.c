@@ -104,7 +104,7 @@ int main(void) {
     cfg.sensor_count = cp.sensor_count;
     savia_device_id_t dev = { .model = "Raspberry Pi Pico WH", .mcu = "RP2040", .fw = "0.1.0-c" };
     uint8_t snap[1024];
-    size_t sl = ble_serialize_config(&dev, &cfg, snap, sizeof(snap));
+    size_t sl = ble_serialize_config(&dev, &cfg, false, snap, sizeof(snap));
     assert(sl > 0);
     cbor_reader_t r; cbor_r_init(&r, snap, sl);
     uint64_t mc; assert(cbor_r_map(&r, &mc));   // top-level is a well-formed CBOR map
@@ -154,9 +154,61 @@ int main(void) {
         }
         big.sensor_count = SAVIA_MAX_SENSORS;
         uint8_t out[2048];
-        size_t bl = ble_serialize_config(&dev, &big, out, sizeof(out));
+        size_t bl = ble_serialize_config(&dev, &big, false, out, sizeof(out));
         assert(bl > 0 && bl <= 2048);   // must fit ble_gatt.c H_CONFIG tmp[2048]
         printf("test_sensors: worst-case 6x generic-4ch snapshot fits 2048 B (%zu B)\n", bl);
+    }
+
+    // --- new simple types: DHT11 / HC-SR04 (gpio2) / actuator + unit label ---
+    {
+        uint8_t b[512];
+        cbor_writer_t w; cbor_w_init(&w, b, sizeof(b));
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "v");  cbor_w_uint(&w, 1);
+        cbor_w_textz(&w, "op"); cbor_w_textz(&w, "set");
+        cbor_w_textz(&w, "sensors"); cbor_w_array(&w, 3);
+        // DHT11 on GP8 (single pin, self-describing).
+        cbor_w_map(&w, 2);
+        cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, 8);
+        cbor_w_textz(&w, "type"); cbor_w_textz(&w, "dht11");
+        // HC-SR04: trigger GP6 + echo GP7 + free unit label.
+        cbor_w_map(&w, 5);
+        cbor_w_textz(&w, "gpio");  cbor_w_uint(&w, 6);
+        cbor_w_textz(&w, "gpio2"); cbor_w_uint(&w, 7);
+        cbor_w_textz(&w, "type");  cbor_w_textz(&w, "hc_sr04");
+        cbor_w_textz(&w, "kind");  cbor_w_textz(&w, "distance");
+        cbor_w_textz(&w, "unit");  cbor_w_textz(&w, "mm");
+        // Digital actuator (valve) on GP9.
+        cbor_w_map(&w, 2);
+        cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, 9);
+        cbor_w_textz(&w, "type"); cbor_w_textz(&w, "actuator");
+        assert(!w.overflow);
+
+        ble_config_patch_t cp3;
+        assert(ble_parse_config_patch(b, w.len, &cp3));
+        assert(cp3.has_sensors && cp3.sensor_count == 3);
+        assert(cp3.sensors[0].type == SENSOR_DHT11 && cp3.sensors[0].gpio == 8);
+        assert(cp3.sensors[0].gpio2 == SAVIA_GPIO_NONE);       // absent -> unused
+        assert(cp3.sensors[1].type == SENSOR_HCSR04);
+        assert(cp3.sensors[1].gpio == 6 && cp3.sensors[1].gpio2 == 7);
+        assert(cp3.sensors[1].kind == READING_DISTANCE);
+        assert(strcmp(cp3.sensors[1].unit, "mm") == 0);
+        assert(cp3.sensors[2].type == SENSOR_ACTUATOR_DIGITAL && cp3.sensors[2].gpio == 9);
+
+        // The set validates against the default reservations, and a snapshot
+        // carrying gpio2/unit serializes to well-formed CBOR.
+        int bad3 = 99;
+        assert(pinmap_check_sensors(&cfg, cp3.sensors, 3, &bad3) == SAVIA_PIN_ASSIGN_OK);
+        station_config_t c3;
+        config_load_defaults(&c3);
+        for (uint8_t i = 0; i < 3; i++) c3.sensors[i] = cp3.sensors[i];
+        c3.sensor_count = 3;
+        uint8_t snap3[1024];
+        size_t sl3 = ble_serialize_config(&dev, &c3, false, snap3, sizeof(snap3));
+        assert(sl3 > 0);
+        cbor_reader_t r3; cbor_r_init(&r3, snap3, sl3);
+        uint64_t mc3; assert(cbor_r_map(&r3, &mc3));
+        printf("test_sensors: new types (dht11 / hc_sr04+gpio2 / actuator) + unit OK\n");
     }
 
     printf("test_sensors: OK\n");

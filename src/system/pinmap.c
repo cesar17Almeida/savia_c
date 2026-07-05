@@ -34,9 +34,18 @@ uint8_t pinmap_caps_for_sensor(savia_sensor_type_t type) {
             return SAVIA_PIN_CAP_PIO;   // SDI-12 / 1-Wire framing is driven by a PIO program
         case SENSOR_ANALOG_LINEAR:
             return SAVIA_PIN_CAP_ADC;   // real analog input -> GP26..GP28 only
+        case SENSOR_DHT11:              // bit-banged proprietary 1-wire timing
+        case SENSOR_HCSR04:             // trigger/echo pulses (both pins DIGITAL)
+        case SENSOR_ACTUATOR_DIGITAL:   // plain GPIO output
+            return SAVIA_PIN_CAP_DIGITAL;
         default:
             return 0;
     }
+}
+
+// Second data pin, if the type uses one (HC-SR04 echo). SAVIA_GPIO_NONE = none.
+static uint8_t slot_gpio2(const savia_sensor_slot_t *s) {
+    return s->type == SENSOR_HCSR04 ? s->gpio2 : SAVIA_GPIO_NONE;
 }
 
 void pinmap_build(const station_config_t *cfg, savia_pin_info_t out[SAVIA_GPIO_COUNT]) {
@@ -70,14 +79,18 @@ void pinmap_build(const station_config_t *cfg, savia_pin_info_t out[SAVIA_GPIO_C
     }
 
     // Sensors claim only still-free pins (validation keeps it that way at runtime).
+    // A slot may own TWO pins (HC-SR04 trigger + echo): both carry the same port.
     uint8_t n = cfg->sensor_count <= SAVIA_MAX_SENSORS ? cfg->sensor_count : SAVIA_MAX_SENSORS;
     for (uint8_t i = 0; i < n; i++) {
         if (cfg->sensors[i].type == SENSOR_NONE) continue;
-        uint8_t g = cfg->sensors[i].gpio;
-        if (g < SAVIA_GPIO_COUNT && out[g].state == SAVIA_PIN_FREE) {
-            out[g].state  = SAVIA_PIN_IN_USE;
-            out[g].reason = SAVIA_PIN_REASON_SENSOR;
-            out[g].port   = (uint8_t)(i + 1);
+        uint8_t pins[2] = { cfg->sensors[i].gpio, slot_gpio2(&cfg->sensors[i]) };
+        for (int p = 0; p < 2; p++) {
+            uint8_t g = pins[p];
+            if (g < SAVIA_GPIO_COUNT && out[g].state == SAVIA_PIN_FREE) {
+                out[g].state  = SAVIA_PIN_IN_USE;
+                out[g].reason = SAVIA_PIN_REASON_SENSOR;
+                out[g].port   = (uint8_t)(i + 1);
+            }
         }
     }
 }
@@ -96,9 +109,9 @@ savia_pin_assign_t pinmap_check_assign(const station_config_t *cfg, uint8_t gpio
     uint8_t n = cfg->sensor_count <= SAVIA_MAX_SENSORS ? cfg->sensor_count : SAVIA_MAX_SENSORS;
     for (uint8_t i = 0; i < n; i++) {
         if ((int) i == exclude_slot) continue;
-        if (cfg->sensors[i].type != SENSOR_NONE && cfg->sensors[i].gpio == gpio) {
-            return SAVIA_PIN_ASSIGN_OCCUPIED;
-        }
+        if (cfg->sensors[i].type == SENSOR_NONE) continue;
+        if (cfg->sensors[i].gpio == gpio) return SAVIA_PIN_ASSIGN_OCCUPIED;
+        if (slot_gpio2(&cfg->sensors[i]) == gpio) return SAVIA_PIN_ASSIGN_OCCUPIED;
     }
     return SAVIA_PIN_ASSIGN_OK;
 }
@@ -124,6 +137,19 @@ savia_pin_assign_t pinmap_check_sensors(const station_config_t *base,
         if (r != SAVIA_PIN_ASSIGN_OK) {
             if (bad_index) *bad_index = (int) i;
             return r;
+        }
+        // Two-pin types: gpio2 must exist (HC-SR04 without echo -> out of range,
+        // since SAVIA_GPIO_NONE = 0xFF), differ from gpio, and pass the same checks.
+        if (slots[i].type == SENSOR_HCSR04) {
+            if (slots[i].gpio2 == slots[i].gpio) {
+                if (bad_index) *bad_index = (int) i;
+                return SAVIA_PIN_ASSIGN_OCCUPIED;
+            }
+            r = pinmap_check_assign(&scratch, slots[i].gpio2, need, (int) i);
+            if (r != SAVIA_PIN_ASSIGN_OK) {
+                if (bad_index) *bad_index = (int) i;
+                return r;
+            }
         }
     }
     return SAVIA_PIN_ASSIGN_OK;

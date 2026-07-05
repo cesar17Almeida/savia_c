@@ -9,6 +9,9 @@ typedef enum {
     READING_SOIL_MOISTURE = 0,    // VWC 0..1
     READING_SOIL_TEMPERATURE = 1, // degrees C
     READING_AIR_TEMPERATURE = 2,  // TA, degrees C (LSTM input; sourced from weather)
+    READING_AIR_HUMIDITY = 3,     // relative humidity, %RH (DHT11)
+    READING_DISTANCE = 4,         // mm (HC-SR04)
+    READING_GENERIC = 5,          // free magnitude; display unit lives in slot `unit`
 } savia_reading_kind_t;
 
 // A single sensor reading (mirrors savia_py's Reading).

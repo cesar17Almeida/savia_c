@@ -78,6 +78,46 @@ int main(void) {
         assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_RESERVED && bad == 0);
     }
 
-    printf("test_pinmap: OK (caps + state + assignment + atomic sensors[] validation)\n");
+    // --- two-pin slots (HC-SR04 trigger + echo via gpio2) ---
+    {
+        savia_sensor_slot_t set[2] = {0};
+        set[0].type = SENSOR_HCSR04; set[0].gpio = 6; set[0].gpio2 = 7;
+        set[1].type = SENSOR_NONE;   set[1].gpio2 = SAVIA_GPIO_NONE;
+        int bad = 99;
+        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OK);
+
+        set[0].gpio2 = SAVIA_GPIO_NONE;                          // echo pin missing
+        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OUT_OF_RANGE && bad == 0);
+
+        set[0].gpio2 = 6;                                        // echo == trigger
+        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OCCUPIED && bad == 0);
+
+        set[0].gpio2 = 15;                                       // echo on the wake button
+        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_RESERVED && bad == 0);
+
+        set[0].gpio2 = 7;                                        // another slot on the echo pin
+        set[1].type = SENSOR_DHT11; set[1].gpio = 7;
+        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OCCUPIED);
+
+        set[1].gpio = 8;                                         // clean set: HC-SR04 + DHT11
+        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OK);
+
+        // pinmap_build marks BOTH pins of the two-pin slot with the same port.
+        station_config_t two = cfg;
+        two.sensor_count = 1;
+        two.sensors[0] = set[0];
+        savia_pin_info_t pins2[SAVIA_GPIO_COUNT];
+        pinmap_build(&two, pins2);
+        assert(pins2[6].state == SAVIA_PIN_IN_USE && pins2[6].port == 1);
+        assert(pins2[7].state == SAVIA_PIN_IN_USE && pins2[7].port == 1);
+
+        // Actuator: plain DIGITAL single pin.
+        savia_sensor_slot_t act[1] = {0};
+        act[0].type = SENSOR_ACTUATOR_DIGITAL; act[0].gpio = 9;
+        act[0].gpio2 = SAVIA_GPIO_NONE;
+        assert(pinmap_check_sensors(&cfg, act, 1, &bad) == SAVIA_PIN_ASSIGN_OK);
+    }
+
+    printf("test_pinmap: OK (caps + state + assignment + atomic sensors[] + gpio2)\n");
     return 0;
 }
