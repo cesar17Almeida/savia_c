@@ -6,6 +6,7 @@
 #include "savia/config.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 // Live LoRa link state, surfaced to the app over BLE (status …0010). The node can
 // only measure the DOWNLINK signal (what it hears from the gateway), and only after
@@ -24,10 +25,22 @@ typedef struct {
 
 bool lora_init(const station_config_t *cfg);
 
-// One Class-A cycle: uplink a compact forecast summary, then parse any downlink
-// (clock + air-temperature forecast) into the weather cache. Returns true if a
-// downlink was applied. Rate-limited to one attempt per LORA_PERIOD.
-bool lora_cycle(void);
+// One Class-A cycle. The uplink depends on state and cfg->inference_mode:
+// pending CFG_ACK > dirty coords > SOIL records (FORWARD) / forecast (LOCAL).
+// Any downlink is parsed: TIME_TA -> clock + weather cache; CONFIG -> the TLV is
+// stashed for the supervisor (lora_take_config_tlv), which owns cfg. Returns true
+// if a downlink was applied/stashed. Rate-limited to one attempt per
+// cfg->lora_period_s (clamped); the first call after boot always runs so the
+// clock is established promptly.
+bool lora_cycle(const station_config_t *cfg);
+
+// Fetch (and clear) a CONFIG TLV received in the last downlink. Returns true and
+// copies up to `cap` bytes into buf/*len when one is pending. The supervisor
+// applies it to the BLE-owned cfg (lora_apply_config_tlv) and persists.
+bool lora_take_config_tlv(uint8_t *buf, size_t cap, size_t *len);
+
+// Queue a CFG_ACK uplink (applied/rejected counts) for the next cycle.
+void lora_set_cfg_ack(uint8_t applied, uint8_t rejected);
 
 // On-demand "ping TTN" for the app: (re)configure the module on tx/rx, join if
 // needed, send one confirmed uplink and capture its ACK's RSSI/SNR. Ignores the

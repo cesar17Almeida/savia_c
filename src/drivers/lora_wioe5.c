@@ -32,9 +32,9 @@
 
 #define LORA_JOIN_TIMEOUT_MS    12000u
 #define LORA_UPLINK_TIMEOUT_MS  15000u
-// One uplink (and at most one downlink) per period. TTN fair-use is ~10
-// downlinks/day, so 6 h -> ~4/day. Also rate-limits join retries.
-#define LORA_PERIOD_MS          (6u * 3600u * 1000u)
+// One uplink (and at most one downlink) per cfg.lora_period_s (default 1 h). With a
+// private gateway + paid plan the TTN fair-use cap doesn't apply; the only ceiling
+// is the EU868 ~1% duty cycle, which hourly cycles clear easily. Also gates join retries.
 
 typedef enum { AT_OK, AT_FAIL, AT_TIMEOUT } at_status_t;
 
@@ -246,13 +246,33 @@ static bool lora_open(uint8_t tx, uint8_t rx) {
     gpio_set_function(rx, GPIO_FUNC_UART);
     s_tx = tx; s_rx = rx;
     s_module[0] = '\0';            // drop any stale version until this AT succeeds
+    // Warmup: the Wio-E5 reliably swallows the FIRST command after the UART opens
+    // (observed on-board: first AT always times out, second succeeds). Send a
+    // throwaway AT and ignore the outcome so lora_configure starts clean.
+    {
+        static const char *ok[] = { "OK" };
+        static const char *fail[] = { "ERROR" };
+        (void) at_exec("AT", ok, 1, fail, 1, 300, NULL, 0);
+    }
     s_ready = lora_configure();
     LOG_INFO("LoRa: open uart%d tx=%u rx=%u ready=%d\n",
              s_uart == uart0 ? 0 : 1, tx, rx, s_ready);
     return s_ready;
 }
 
-// --- forecast telemetry for the uplink --------------------------------------
+// --- uplink payload builders --------------------------------------------------
+
+// Pending CFG_ACK for the next cycle (queued by the supervisor after applying a
+// CONFIG downlink) and the last CONFIG TLV received (handed to the supervisor).
+static bool    s_ack_pending;
+static uint8_t s_ack_applied, s_ack_rejected;
+static uint8_t s_cfg_tlv[LORA_DOWNLINK_MAX];
+static size_t  s_cfg_tlv_len;          // 0 = none pending
+// Coords already uplinked this power cycle (re-sent when they change).
+static bool    s_coords_sent;
+static int32_t s_coords_lat, s_coords_lon;
+// Newest soil hour already uplinked (avoid resending the same aggregates).
+static uint32_t s_last_soil_hour_s;
 
 // Min of the still-upcoming HS30 forecast, for the uplink payload. Empty on the
 // Pico WH (inference is off-device) -> reported as unknown.
@@ -273,15 +293,63 @@ static uint64_t wall_now(uint32_t uptime_ms) {
     return clock_is_set() ? clock_now(uptime_ms) : 0;
 }
 
-// Send one confirmed uplink (HS30 forecast min) and apply any downlink. Captures
-// the ACK's RSSI/SNR into the last-signal state, stamped with now_wall_ms. Assumes
-// joined. Returns true if a downlink was decoded and applied.
-static bool do_uplink(uint64_t now_wall_ms) {
-    float hs30 = 0.0f;
-    bool has = forecast_min_upcoming(now_wall_ms, &hs30);
-    uint8_t payload[LORA_UPLINK_LEN];
-    size_t plen = lora_encode_uplink(has, hs30, payload, sizeof payload);
-    char tx_hex[2 * LORA_UPLINK_LEN + 1];
+// Build SOIL records (FORWARD): hourly aggregates newer than the last uplinked
+// hour, merged per hour from the (kind, depth) buckets. Returns record count.
+static uint8_t build_soil_recs(uint64_t now_ms, lora_soil_rec_t *recs) {
+    if (!now_ms) return 0;                        // no wall clock yet
+    uint64_t from = (uint64_t)(s_last_soil_hour_s + 1) * 1000u;
+    uint64_t lookback = now_ms > 5u * 3600000u ? now_ms - 5u * 3600000u : 0;
+    if (from < lookback) from = lookback;         // cap the backlog window
+    savia_aggregate_t aggs[24];
+    size_t na = storage_aggregate_hourly(from, now_ms, 0, aggs, 24);
+    uint8_t n = 0;
+    for (size_t i = 0; i < na && n < LORA_SOIL_RECS_MAX; i++) {
+        uint32_t hour_s = (uint32_t)(aggs[i].hour_ms / 1000u);
+        uint8_t k = 0;                            // find/create the hour record
+        for (; k < n; k++) if (recs[k].ts_hour_s == hour_s) break;
+        if (k == n) {
+            recs[n] = (lora_soil_rec_t){ .ts_hour_s = hour_s };
+            n++;
+        }
+        if (aggs[i].kind == READING_SOIL_MOISTURE && aggs[i].depth_cm == 10) {
+            recs[k].hs10 = aggs[i].mean; recs[k].has_hs10 = true;
+        } else if (aggs[i].kind == READING_SOIL_MOISTURE && aggs[i].depth_cm == 30) {
+            recs[k].hs30 = aggs[i].mean; recs[k].has_hs30 = true;
+        } else if (aggs[i].kind == READING_AIR_TEMPERATURE) {
+            recs[k].ta = aggs[i].mean; recs[k].has_ta = true;
+        }
+    }
+    return n;
+}
+
+// Send one confirmed uplink (payload picked by state/mode) and apply any
+// downlink. Captures the ACK's RSSI/SNR into the last-signal state, stamped with
+// now_wall_ms. Assumes joined. Returns true if a downlink was decoded/stashed.
+static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
+    uint8_t payload[LORA_UPLINK_MAX];
+    size_t plen = 0;
+    lora_soil_rec_t soil[LORA_SOIL_RECS_MAX];
+    uint8_t nsoil = 0;
+
+    // Priority: pending CFG_ACK > dirty coords > mode payload. cfg==NULL (the
+    // app's ping) always sends the plain forecast payload.
+    if (s_ack_pending) {
+        plen = lora_encode_uplink_cfg_ack(s_ack_applied, s_ack_rejected,
+                                          payload, sizeof payload);
+    } else if (cfg && cfg->has_coords &&
+               (!s_coords_sent || s_coords_lat != cfg->lat_e7 || s_coords_lon != cfg->lon_e7)) {
+        plen = lora_encode_uplink_coords(cfg->lat_e7, cfg->lon_e7,
+                                         cfg->utc_offset_min, payload, sizeof payload);
+    } else if (cfg && cfg->inference_mode == SAVIA_INFER_FORWARD &&
+               (nsoil = build_soil_recs(now_wall_ms, soil)) > 0) {
+        plen = lora_encode_uplink_soil(soil, nsoil, payload, sizeof payload);
+    } else {
+        // LOCAL (forecast min) or FORWARD with nothing new: keeps the RX window open.
+        float hs30 = 0.0f;
+        bool has = forecast_min_upcoming(now_wall_ms, &hs30);
+        plen = lora_encode_uplink_forecast(has, hs30, payload, sizeof payload);
+    }
+    char tx_hex[2 * LORA_UPLINK_MAX + 1];
     bytes_to_hex(payload, plen, tx_hex);
 
     static const char *ok[]     = { "OK" };
@@ -309,6 +377,20 @@ static bool do_uplink(uint64_t now_wall_ms) {
         return false;
     }
     if (st == AT_TIMEOUT) { LOG_WARN("LoRa: uplink timeout\n"); return false; }
+
+    // Uplink went out: settle the send-once state for the payload we just sent.
+    if (s_ack_pending) {
+        s_ack_pending = false;
+    } else if (cfg && cfg->has_coords &&
+               (!s_coords_sent || s_coords_lat != cfg->lat_e7 || s_coords_lon != cfg->lon_e7)) {
+        s_coords_sent = true;
+        s_coords_lat = cfg->lat_e7;
+        s_coords_lon = cfg->lon_e7;
+    } else if (nsoil > 0) {
+        for (uint8_t k = 0; k < nsoil; k++)
+            if (soil[k].ts_hour_s > s_last_soil_hour_s) s_last_soil_hour_s = soil[k].ts_hour_s;
+    }
+
     if (rx_hex[0] == '\0') { LOG_INFO("LoRa: uplink sent, no downlink\n"); return false; }
 
     uint8_t dl[LORA_DOWNLINK_MAX];
@@ -318,9 +400,30 @@ static bool do_uplink(uint64_t now_wall_ms) {
         LOG_WARN("LoRa: bad downlink (%d B)\n", dn);
         return false;
     }
+
+    if (w.type == LORA_DN_CONFIG) {
+        // Stash the TLV for the supervisor (it owns cfg + persistence).
+        s_cfg_tlv_len = w.tlv_len < sizeof s_cfg_tlv ? w.tlv_len : sizeof s_cfg_tlv;
+        memcpy(s_cfg_tlv, w.tlv, s_cfg_tlv_len);
+        LOG_INFO("LoRa downlink: config patch (%u B TLV)\n", (unsigned) s_cfg_tlv_len);
+        return true;
+    }
+
     uint32_t now_up = to_ms_since_boot(get_absolute_time());
-    if (w.has_time) clock_set(w.time_ms, now_up);
-    weather_set(w.past_ta, w.n_past, w.future_ta, w.n_future, wall_now(now_up));
+    if (w.has_time) {
+        uint64_t outage = 0;
+        if (clock_apply_sync(w.time_ms, now_up, CLOCK_SRC_LORA, &outage)) {
+            if (outage >= CLOCK_OUTAGE_WARN_MS)
+                LOG_WARN("clock: board was powered off ~%llu min (LoRa sync)\n",
+                         (unsigned long long) (outage / 60000ULL));
+        } else {
+            LOG_WARN("LoRa: implausible downlink clock (%llu), ignored\n",
+                     (unsigned long long) w.time_ms);
+        }
+    }
+    // A pure clock sync (both arrays empty) must NOT wipe the weather cache.
+    if (w.n_past || w.n_future)
+        weather_set(w.past_ta, w.n_past, w.future_ta, w.n_future, wall_now(now_up));
     LOG_INFO("LoRa downlink: %u past + %u future TA%s\n",
              w.n_past, w.n_future, w.has_time ? ", clock set" : "");
     return true;
@@ -337,12 +440,17 @@ bool lora_init(const station_config_t *cfg) {
     return s_joined;
 }
 
-bool lora_cycle(void) {
-    if (!s_ready) return false;
+bool lora_cycle(const station_config_t *cfg) {
+    if (!s_ready || !cfg) return false;
     uint32_t up = to_ms_since_boot(get_absolute_time());
 
-    // One uplink per period (TTN fair use); the first cycle runs immediately.
-    if (s_attempted && (up - s_last_attempt_ms) < LORA_PERIOD_MS) return false;
+    // Clamp the app-set period so a bad/zero config can't spam the network.
+    uint32_t period_s = cfg->lora_period_s;
+    if (period_s < SAVIA_LORA_PERIOD_MIN_S) period_s = SAVIA_LORA_PERIOD_MIN_S;
+    if (period_s > SAVIA_LORA_PERIOD_MAX_S) period_s = SAVIA_LORA_PERIOD_MAX_S;
+
+    // One uplink per period; the first cycle after boot runs immediately.
+    if (s_attempted && (up - s_last_attempt_ms) < period_s * 1000u) return false;
     s_attempted = true;
     s_last_attempt_ms = up;
 
@@ -351,9 +459,24 @@ bool lora_cycle(void) {
         if (!s_joined) { LOG_WARN("LoRa: join failed, retry next period\n"); return false; }
         LOG_INFO("LoRa: joined network\n");
     }
-    bool applied = do_uplink(wall_now(up));
+    bool applied = do_uplink(cfg, wall_now(up));
     s_seq++;
     return applied;
+}
+
+bool lora_take_config_tlv(uint8_t *buf, size_t cap, size_t *len) {
+    if (s_cfg_tlv_len == 0) return false;
+    size_t n = s_cfg_tlv_len < cap ? s_cfg_tlv_len : cap;
+    memcpy(buf, s_cfg_tlv, n);
+    *len = n;
+    s_cfg_tlv_len = 0;
+    return true;
+}
+
+void lora_set_cfg_ack(uint8_t applied, uint8_t rejected) {
+    s_ack_applied = applied;
+    s_ack_rejected = rejected;
+    s_ack_pending = true;
 }
 
 bool lora_ping(uint8_t tx_gpio, uint8_t rx_gpio, uint64_t now_wall_ms) {
@@ -367,7 +490,7 @@ bool lora_ping(uint8_t tx_gpio, uint8_t rx_gpio, uint64_t now_wall_ms) {
         LOG_INFO("LoRa: ping joined network\n");
     }
     s_has_signal = false;             // this ping must measure its OWN downlink signal
-    do_uplink(now_wall_ms);
+    do_uplink(NULL, now_wall_ms);     // NULL cfg -> plain forecast payload
     s_seq++;                          // a fresh result is now visible in the status
     return s_joined;
 }
