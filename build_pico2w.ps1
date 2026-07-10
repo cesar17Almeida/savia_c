@@ -21,7 +21,7 @@ Write-Host "Starting build process for Pico 2 W..." -ForegroundColor Cyan
 
 if (Test-Path $VcvarsPath) {
     # Run through cmd to ensure MSVC compiler environment is loaded correctly
-    cmd.exe /c "`"$VcvarsPath`" && cmake -B $BuildDir -G Ninja -DPICO_BOARD=pico2_w -DPICOTOOL_FORCE_FETCH_FROM_GIT=ON && ninja -C $BuildDir"
+    cmd.exe /c "`"$VcvarsPath`" && cmake -B $BuildDir -G Ninja -DPICO_BOARD=pico2_w -DSAVIA_ENABLE_BLE=ON -DSAVIA_ON_DEVICE_INFERENCE=ON -DPICOTOOL_FORCE_FETCH_FROM_GIT=ON && ninja -C $BuildDir"
 } else {
     # Attempt direct build if already running inside VS Developer PowerShell
     Write-Host "vcvars64.bat not found. Attempting direct cmake build..." -ForegroundColor Yellow
@@ -31,7 +31,7 @@ if (Test-Path $VcvarsPath) {
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`nBuild complete! UF2 binary is located at:" -ForegroundColor Green
-    Write-Host "$BuildDir/savia_c-pico2_w-mloffdevice.uf2" -ForegroundColor White
+    Write-Host "$BuildDir/savia_c-pico2_w-mlONdevice.uf2" -ForegroundColor White
 } else {
     Write-Error "Build failed with exit code $LASTEXITCODE"
 }
