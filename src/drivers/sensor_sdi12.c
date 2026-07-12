@@ -80,12 +80,35 @@ static int sdi_decode(int ns, char *out, int max) {
 }
 
 // One raw command -> decoded printable reply (CRLF stripped). Blocking (~win ms).
+// With log_level=DEBUG every exchange lands in the BLE-served log ring, human
+// readable (ASCII + hex), so the app can diagnose "no reply" vs "garbage reply".
 static int sdi12_transact(uint8_t gpio, const char *cmd, char *reply, size_t cap,
                           uint32_t win_ms) {
     if (cap < 2) return 0;
+    LOG_DEBUG("SDI12 GP%u -> \"%s\" (win %lu ms)\n", gpio, cmd, (unsigned long) win_ms);
     sdi_send(gpio, cmd);
     int ns = sdi_capture(gpio, win_ms);
-    return sdi_decode(ns, reply, (int) cap);
+    int n = sdi_decode(ns, reply, (int) cap);
+    if (n <= 0) {
+        LOG_DEBUG("SDI12 GP%u <- (sin datos; linea %s en reposo)\n", gpio,
+                  gpio_get(gpio) ? "ALTA (rara)" : "baja (normal)");
+        return n;
+    }
+    // Printable copy (non-ASCII -> '.') + first bytes in hex on a second line.
+    char vis[41];
+    int vn = n < 40 ? n : 40;
+    for (int i = 0; i < vn; i++) {
+        char c = reply[i];
+        vis[i] = (c >= 32 && c < 127) ? c : '.';
+    }
+    vis[vn] = '\0';
+    LOG_DEBUG("SDI12 GP%u <- %dB \"%s\"\n", gpio, n, vis);
+    char hex[3 * 16 + 1];
+    int hn = n < 16 ? n : 16;
+    for (int i = 0; i < hn; i++)
+        snprintf(&hex[3 * i], 4, "%02X ", (uint8_t) reply[i]);
+    LOG_DEBUG("SDI12 hex: %s%s\n", hex, n > 16 ? "..." : "");
+    return n;
 }
 
 // --- SDI-12 console (BLE op "sdi12"; mirrors the LoRa AT terminal) -----------
@@ -147,6 +170,8 @@ static int measure_sdi12(const savia_sensor_slot_t *slot,
     int n = sdi12_measure_values(slot->gpio, slot->address ? slot->address : '0',
                                  vals, 8);
     if (n <= 0) { LOG_WARN("sdi12: no reply on GP%u\n", slot->gpio); return -1; }
+    LOG_INFO("sdi12: GP%u real measure, %d values (v0=%d.%02d)\n", slot->gpio, n,
+             (int) vals[0], (int)(vals[0] * 100) % 100);
 
     int w = 0;
     if (slot->type == SENSOR_SDI12_AQUACHECK) {
