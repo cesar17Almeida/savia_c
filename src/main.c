@@ -334,6 +334,13 @@ int main(void) {
             }
         }
 
+        if (ble_take_infer_trigger()) {
+            if (live.inference_mode == SAVIA_INFER_LOCAL && inference_on_device()){
+                LOG_INFO("BLE: running on-demand inference \n");
+                inference_run_daily(now_ms);
+            }
+        }
+
         // On-demand LoRa ping from the app (the nap wakes early to service it):
         // (re)open the module on the configured pins, join, send one confirmed
         // uplink, capture the ACK's RSSI/SNR, and persist the signal.

@@ -21,6 +21,7 @@ bool ble_take_config_dirty(void);
 // True once (then clears) if the app requested an on-demand LoRa ping; the
 // supervisor runs it (blocking AT) outside the BLE callback context.
 bool ble_take_lora_ping(void);
+bool ble_take_infer_trigger(void);
 // Non-destructive peek so the light-sleep nap can end early to service a ping.
 bool ble_lora_ping_pending(void);
 
