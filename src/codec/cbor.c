@@ -188,6 +188,28 @@ bool cbor_r_double(cbor_reader_t *r, double *v) {
         *v = (double) f;
         return true;
     }
+    if (ib == 0xf9) {                       // half-precision float
+        if (r->pos + 3 > r->len) { r->err = true; return false; }
+        r->pos++;
+        uint16_t bits = (r->buf[r->pos] << 8) | r->buf[r->pos + 1];
+        r->pos += 2;
+        int s = (bits >> 15) & 1;
+        int e = (bits >> 10) & 0x1f;
+        int f = bits & 0x3ff;
+        double val = 0.0;
+        if (e == 0) {
+            val = f * 5.9604644775390625e-08; // 2^-24
+        } else if (e == 31) {
+            // we don't need strict inf/nan for savia temperatures, just let it be 0 or max
+        } else {
+            val = (1.0 + f / 1024.0);
+            int exp = e - 15;
+            while (exp > 0) { val *= 2.0; exp--; }
+            while (exp < 0) { val /= 2.0; exp++; }
+        }
+        *v = s ? -val : val;
+        return true;
+    }
     uint8_t major; uint64_t val;            // integer fallback
     if (!r_head(r, &major, &val)) return false;
     if (major == 0) { *v = (double) val; return true; }

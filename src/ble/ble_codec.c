@@ -3,6 +3,7 @@
 #include "savia/protocol.h"
 #include "savia/pinmap.h"
 #include "savia/actuator.h"
+#include "savia/weather.h"
 #include <string.h>
 
 static const char *kind_str(uint8_t kind) {
@@ -372,13 +373,15 @@ bool ble_parse_time_sync(const uint8_t *buf, size_t len, uint64_t *ms_out) {
     return !r.err && ok_op && have_ms && ver == SAVIA_PROTOCOL_VERSION;
 }
 
-bool ble_parse_weather(const uint8_t *buf, size_t len) {
+bool ble_parse_weather(const uint8_t *buf, size_t len, float *past_ta, uint8_t *n_past, float *future_ta, uint8_t *n_future) {
     cbor_reader_t r;
     cbor_r_init(&r, buf, len);
     uint64_t count;
     if (!cbor_r_map(&r, &count)) return false;
     bool ok_op = false, have_data = false;
     int ver = 0;
+    if (n_past) *n_past = 0;
+    if (n_future) *n_future = 0;
     for (uint64_t i = 0; ; i++) {
         if (count == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
         else if (i >= count) break;
@@ -390,7 +393,46 @@ bool ble_parse_weather(const uint8_t *buf, size_t len) {
             const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
             ok_op = cbor_text_eq(s, sn, "upd");
         } else if (cbor_text_eq(k, kn, "data")) {
-            if (!cbor_r_skip(&r)) return false; have_data = true;   // contents unused on WH
+            uint64_t dcount;
+            if (!cbor_r_map(&r, &dcount)) return false;
+            for (uint64_t j = 0; ; j++) {
+                if (dcount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
+                else if (j >= dcount) break;
+                const char *dk; size_t dkn;
+                if (!cbor_r_text(&r, &dk, &dkn)) return false;
+                if (cbor_text_eq(dk, dkn, "past_ta_hourly")) {
+                    uint64_t acount;
+                    if (!cbor_r_array(&r, &acount)) return false;
+                    for (uint64_t a = 0; ; a++) {
+                        if (acount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
+                        else if (a >= acount) break;
+                        double dval;
+                        if (!cbor_r_double(&r, &dval)) return false;
+                        float val = (float)dval;
+                        if (past_ta && n_past && *n_past < WEATHER_PAST_MAX) {
+                            past_ta[*n_past] = val;
+                            (*n_past)++;
+                        }
+                    }
+                } else if (cbor_text_eq(dk, dkn, "future_ta_hourly")) {
+                    uint64_t acount;
+                    if (!cbor_r_array(&r, &acount)) return false;
+                    for (uint64_t a = 0; ; a++) {
+                        if (acount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
+                        else if (a >= acount) break;
+                        double dval;
+                        if (!cbor_r_double(&r, &dval)) return false;
+                        float val = (float)dval;
+                        if (future_ta && n_future && *n_future < WEATHER_FUTURE_MAX) {
+                            future_ta[*n_future] = val;
+                            (*n_future)++;
+                        }
+                    }
+                } else {
+                    if (!cbor_r_skip(&r)) return false;
+                }
+            }
+            have_data = true;
         } else {
             if (!cbor_r_skip(&r)) return false;
         }

@@ -27,6 +27,7 @@
 #include "savia/storage.h"
 #include "savia/clock.h"
 #include "savia/protocol.h"
+#include "savia/weather.h"
 #include "savia/inference.h"   // inference_on_device(): gates LOCAL mode + infer_dev
 #include "savia/sdi12.h"       // probe console result (op "sdi12")
 #include "savia/log.h"
@@ -104,6 +105,7 @@ static bool     g_act_on;
 static uint8_t  g_cfg_ack[64];
 static size_t   g_cfg_ack_len;
 static bool     g_cfg_ack_pending;       // ack waiting for a CAN_SEND_NOW slot
+static bool     g_infer_pending;         // app asked to trigger inference
 
 // data_response staging: one serialized payload, streamed as chunks.
 // 12 KB holds ~150 raw readings (~67 B each); keep in sync with q_rd below.
@@ -268,6 +270,14 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
             LOG_INFO("BLE: act queued: port %u -> %s\n", dr.port, dr.on ? "ON" : "OFF");
         }
         g_resp_len = ble_serialize_count(1, g_resp, sizeof(g_resp));   // queued ack
+    } else if (strcmp(dr.op, SAVIA_OP_INFER) == 0) { // ask IoT station to make inference
+        if (inference_on_device()) {
+            g_infer_pending = true;
+            LOG_INFO("BLE: infer queued\n");
+            g_resp_len = ble_serialize_count(1, g_resp, sizeof(g_resp));
+        } else {
+            g_resp_len = ble_serialize_count(0, g_resp, sizeof(g_resp));
+        }
     } else {  // GET
         if (strcmp(dr.kind, SAVIA_KIND_RAW) == 0) {
             size_t n = storage_query_raw(from, to, lim, q_rd, sizeof(q_rd) / sizeof(q_rd[0]));
@@ -520,7 +530,7 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
 
 static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_mode,
                         uint16_t offset, uint8_t *buffer, uint16_t buffer_size) {
-    (void) con; (void) tx_mode; (void) offset;
+    (void) con;
     LOG_DEBUG("BLE: write handle=0x%04x len=%u\n", att_handle, buffer_size);
     log_hexdump("  <- phone", buffer, buffer_size);
 
@@ -547,10 +557,37 @@ static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_m
                             (unsigned long long) ms);
         } else LOG_INFO("BLE: bad time_sync\n");
     } else if (att_handle == H_WEATHER) {
-        if (ble_parse_weather(buffer, buffer_size)) {
-            g_weather_updated_ms = wall_now();
-            LOG_INFO("BLE: weather cached\n");
-        } else LOG_INFO("BLE: bad weather\n");
+        static uint8_t weather_buf[512];
+        static uint16_t weather_len = 0;
+
+        if (tx_mode == ATT_TRANSACTION_MODE_ACTIVE || tx_mode == ATT_TRANSACTION_MODE_NONE) {
+            if (offset == 0) weather_len = 0;
+            if (offset + buffer_size <= sizeof(weather_buf)) {
+                memcpy(weather_buf + offset, buffer, buffer_size);
+                if (offset + buffer_size > weather_len) weather_len = offset + buffer_size;
+            }
+            if (tx_mode == ATT_TRANSACTION_MODE_ACTIVE) return 0;
+        } else if (tx_mode == ATT_TRANSACTION_MODE_CANCEL) {
+            weather_len = 0;
+            return 0;
+        }
+
+        uint8_t *parse_buf = (tx_mode == ATT_TRANSACTION_MODE_EXECUTE) ? weather_buf : buffer;
+        uint16_t parse_len = (tx_mode == ATT_TRANSACTION_MODE_EXECUTE) ? weather_len : buffer_size;
+
+        if (parse_len > 0) {
+            float pta[WEATHER_PAST_MAX];
+            float fta[WEATHER_FUTURE_MAX];
+            uint8_t np = 0, nf = 0;
+            if (ble_parse_weather(parse_buf, parse_len, pta, &np, fta, &nf)) {
+                weather_set(pta, np, fta, nf, wall_now());
+                g_weather_updated_ms = wall_now();
+                LOG_INFO("BLE: weather cached\n");
+            } else {
+                LOG_INFO("BLE: bad weather\n");
+            }
+        }
+        if (tx_mode == ATT_TRANSACTION_MODE_EXECUTE) weather_len = 0;
     } else if (att_handle == H_DATA_REQUEST) {
         handle_data_request(buffer, buffer_size);
     } else if (att_handle == H_DATA_RESP_CCC) {
@@ -677,9 +714,13 @@ bool ble_take_config_dirty(void) {
 }
 
 bool ble_take_lora_ping(void) {
-    if (!g_lora_ping_pending) return false;
-    g_lora_ping_pending = false;
-    return true;
+    if (g_lora_ping_pending) { g_lora_ping_pending = false; return true; }
+    return false;
+}
+
+bool ble_take_infer_trigger(void) {
+    if (g_infer_pending) { g_infer_pending = false; return true; }
+    return false;
 }
 
 bool ble_lora_ping_pending(void) { return g_lora_ping_pending; }

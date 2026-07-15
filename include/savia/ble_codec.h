@@ -29,7 +29,7 @@ size_t ble_serialize_count(uint64_t count, uint8_t *out, size_t cap);  // {count
 
 // Parsers for the write characteristics.
 bool ble_parse_time_sync(const uint8_t *buf, size_t len, uint64_t *ms_out);  // {v,op:"set",ms}
-bool ble_parse_weather(const uint8_t *buf, size_t len);                      // {v,op:"upd",data:{...}}
+bool ble_parse_weather(const uint8_t *buf, size_t len, float *past_ta, uint8_t *n_past, float *future_ta, uint8_t *n_future);
 
 // Frame a payload into data_response chunks {v,op:"chunk",s,t,eof,p}, calling
 // emit() once per frame. Mirrors savia_py chunked_encode (empty -> 1 eof frame).
