@@ -528,6 +528,22 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
     return 0;
 }
 
+// Parse a complete weather CBOR map and refresh the forecast cache. Shared by
+// the single-write (NONE) path and the reassembled GATT Long Write path.
+static void weather_commit(const uint8_t *buf, uint16_t len) {
+    if (len == 0) return;
+    float pta[WEATHER_PAST_MAX];
+    float fta[WEATHER_FUTURE_MAX];
+    uint8_t np = 0, nf = 0;
+    if (ble_parse_weather(buf, len, pta, &np, fta, &nf)) {
+        weather_set(pta, np, fta, nf, wall_now());
+        g_weather_updated_ms = wall_now();
+        LOG_INFO("BLE: weather cached\n");
+    } else {
+        LOG_INFO("BLE: bad weather\n");
+    }
+}
+
 static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_mode,
                         uint16_t offset, uint8_t *buffer, uint16_t buffer_size) {
     (void) con;
@@ -538,6 +554,31 @@ static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_m
     bool locked = g_cfg && auth_key_is_set(g_cfg->auth_key) && !g_authed;
     if (locked && att_handle != H_AUTH) {
         LOG_INFO("BLE: write locked (auth required)\n");
+        return 0;
+    }
+
+    // GATT Long Write reassembly for H_WEATHER. BTstack delivers each prepared
+    // chunk with the real handle (ACTIVE), but the EXECUTE/CANCEL that close the
+    // transaction arrive with att_handle==0 -- so the transaction is tracked out
+    // of band here, not inside the per-handle switch below.
+    static uint8_t  weather_buf[512];
+    static uint16_t weather_len;
+    static bool     weather_prep;
+    if (tx_mode == ATT_TRANSACTION_MODE_ACTIVE && att_handle == H_WEATHER) {
+        if (offset == 0) { weather_len = 0; weather_prep = true; }
+        if ((size_t) offset + buffer_size <= sizeof weather_buf) {
+            memcpy(weather_buf + offset, buffer, buffer_size);
+            if (offset + buffer_size > weather_len) weather_len = offset + buffer_size;
+        }
+        return 0;
+    }
+    if (tx_mode == ATT_TRANSACTION_MODE_EXECUTE) {
+        if (weather_prep) weather_commit(weather_buf, weather_len);
+        weather_len = 0; weather_prep = false;
+        return 0;
+    }
+    if (tx_mode == ATT_TRANSACTION_MODE_CANCEL) {
+        weather_len = 0; weather_prep = false;
         return 0;
     }
 
@@ -557,37 +598,7 @@ static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_m
                             (unsigned long long) ms);
         } else LOG_INFO("BLE: bad time_sync\n");
     } else if (att_handle == H_WEATHER) {
-        static uint8_t weather_buf[512];
-        static uint16_t weather_len = 0;
-
-        if (tx_mode == ATT_TRANSACTION_MODE_ACTIVE || tx_mode == ATT_TRANSACTION_MODE_NONE) {
-            if (offset == 0) weather_len = 0;
-            if (offset + buffer_size <= sizeof(weather_buf)) {
-                memcpy(weather_buf + offset, buffer, buffer_size);
-                if (offset + buffer_size > weather_len) weather_len = offset + buffer_size;
-            }
-            if (tx_mode == ATT_TRANSACTION_MODE_ACTIVE) return 0;
-        } else if (tx_mode == ATT_TRANSACTION_MODE_CANCEL) {
-            weather_len = 0;
-            return 0;
-        }
-
-        uint8_t *parse_buf = (tx_mode == ATT_TRANSACTION_MODE_EXECUTE) ? weather_buf : buffer;
-        uint16_t parse_len = (tx_mode == ATT_TRANSACTION_MODE_EXECUTE) ? weather_len : buffer_size;
-
-        if (parse_len > 0) {
-            float pta[WEATHER_PAST_MAX];
-            float fta[WEATHER_FUTURE_MAX];
-            uint8_t np = 0, nf = 0;
-            if (ble_parse_weather(parse_buf, parse_len, pta, &np, fta, &nf)) {
-                weather_set(pta, np, fta, nf, wall_now());
-                g_weather_updated_ms = wall_now();
-                LOG_INFO("BLE: weather cached\n");
-            } else {
-                LOG_INFO("BLE: bad weather\n");
-            }
-        }
-        if (tx_mode == ATT_TRANSACTION_MODE_EXECUTE) weather_len = 0;
+        weather_commit(buffer, buffer_size);   // single write that fit one MTU
     } else if (att_handle == H_DATA_REQUEST) {
         handle_data_request(buffer, buffer_size);
     } else if (att_handle == H_DATA_RESP_CCC) {

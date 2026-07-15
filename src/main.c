@@ -335,9 +335,13 @@ int main(void) {
         }
 
         if (ble_take_infer_trigger()) {
-            if (live.inference_mode == SAVIA_INFER_LOCAL && inference_on_device()){
-                LOG_INFO("BLE: running on-demand inference \n");
-                inference_run_daily(now_ms);
+            if (live.inference_mode == SAVIA_INFER_LOCAL && inference_on_device()) {
+                // Recompute the wall clock: the nap above may have advanced it
+                // well past the now_ms captured at the top of the loop.
+                uint64_t up2 = to_ms_since_boot(get_absolute_time());
+                uint64_t inow = clock_is_set() ? clock_now(up2) : up2;
+                LOG_INFO("BLE: running on-demand inference\n");
+                inference_run_daily(inow);
             }
         }
 
