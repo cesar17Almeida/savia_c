@@ -36,9 +36,9 @@ savia_wake_reason_t power_deep_sleep(const station_config_t *cfg, uint32_t secon
             return SAVIA_WAKE_BUTTON;
         }
         // Any app request the supervisor must service ends the nap early: LoRa
-        // ping / AT terminal / SDI-12 console / actuator switch.
+        // ping / AT terminal / SDI-12 console / actuator switch / inference.
         if (ble_lora_ping_pending() || ble_lora_at_pending() ||
-            ble_sdi12_pending() || ble_act_pending()) {
+            ble_sdi12_pending() || ble_act_pending() || ble_infer_pending()) {
             return SAVIA_WAKE_TIMER;
         }
         sleep_ms(step_ms);

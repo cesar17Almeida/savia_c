@@ -21,9 +21,11 @@ bool ble_take_config_dirty(void);
 // True once (then clears) if the app requested an on-demand LoRa ping; the
 // supervisor runs it (blocking AT) outside the BLE callback context.
 bool ble_take_lora_ping(void);
+// True once (then clears) if the app asked the station to run inference now.
 bool ble_take_infer_trigger(void);
-// Non-destructive peek so the light-sleep nap can end early to service a ping.
+// Non-destructive peeks so the light-sleep nap can end early to service a request.
 bool ble_lora_ping_pending(void);
+bool ble_infer_pending(void);
 
 // AT terminal: take the queued raw AT command (copies it into cmd, returns true if
 // one was queued). The supervisor runs it on the module outside the BLE callback.

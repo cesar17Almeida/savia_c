@@ -271,7 +271,9 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
         }
         g_resp_len = ble_serialize_count(1, g_resp, sizeof(g_resp));   // queued ack
     } else if (strcmp(dr.op, SAVIA_OP_INFER) == 0) { // ask IoT station to make inference
-        if (inference_on_device()) {
+        // Ack "queued" (1) only if the run will actually happen: on-device build
+        // AND LOCAL mode. In FORWARD mode the app runs the model, so ack 0.
+        if (inference_on_device() && g_cfg && g_cfg->inference_mode == SAVIA_INFER_LOCAL) {
             g_infer_pending = true;
             LOG_INFO("BLE: infer queued\n");
             g_resp_len = ble_serialize_count(1, g_resp, sizeof(g_resp));
@@ -735,6 +737,7 @@ bool ble_take_infer_trigger(void) {
 }
 
 bool ble_lora_ping_pending(void) { return g_lora_ping_pending; }
+bool ble_infer_pending(void) { return g_infer_pending; }
 
 bool ble_take_lora_at(char *cmd, size_t cap) {
     if (!g_at_pending) return false;
@@ -775,6 +778,8 @@ void ble_poll(uint32_t budget_ms) { (void) budget_ms; }
 bool ble_take_config_dirty(void) { return false; }
 bool ble_take_lora_ping(void) { return false; }
 bool ble_lora_ping_pending(void) { return false; }
+bool ble_take_infer_trigger(void) { return false; }
+bool ble_infer_pending(void) { return false; }
 bool ble_take_lora_at(char *cmd, size_t cap) { (void) cmd; (void) cap; return false; }
 bool ble_lora_at_pending(void) { return false; }
 bool ble_take_sdi12(char *cmd, size_t cap, uint8_t *gpio) { (void) cmd; (void) cap; (void) gpio; return false; }
