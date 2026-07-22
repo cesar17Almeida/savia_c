@@ -318,6 +318,11 @@ int main(void) {
         uint32_t nap = timed
             ? scheduler_next_sleep_s(&sched, now_ms, &live)
             : live.sleep_seconds;
+        // The scheduler doesn't know the radio: also wake for the LoRa cadence.
+        if (live.lora_enabled) {
+            uint32_t lora_due = lora_secs_until_due(&live);
+            if (lora_due < nap) nap = lora_due ? lora_due : 1;
+        }
         savia_wake_reason_t why;
         if (live.deep_sleep_enabled) {
             ble_radio_suspend();

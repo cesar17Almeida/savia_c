@@ -464,6 +464,17 @@ bool lora_cycle(const station_config_t *cfg) {
     return applied;
 }
 
+uint32_t lora_secs_until_due(const station_config_t *cfg) {
+    if (!s_ready || !cfg || !s_attempted) return 0;   // first cycle: due now
+    uint32_t period_s = cfg->lora_period_s;
+    if (period_s < SAVIA_LORA_PERIOD_MIN_S) period_s = SAVIA_LORA_PERIOD_MIN_S;
+    if (period_s > SAVIA_LORA_PERIOD_MAX_S) period_s = SAVIA_LORA_PERIOD_MAX_S;
+    uint32_t up = to_ms_since_boot(get_absolute_time());
+    uint32_t elapsed = up - s_last_attempt_ms;
+    uint32_t period_ms = period_s * 1000u;
+    return elapsed >= period_ms ? 0 : (period_ms - elapsed + 999u) / 1000u;
+}
+
 bool lora_take_config_tlv(uint8_t *buf, size_t cap, size_t *len) {
     if (s_cfg_tlv_len == 0) return false;
     size_t n = s_cfg_tlv_len < cap ? s_cfg_tlv_len : cap;

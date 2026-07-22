@@ -34,6 +34,10 @@ bool lora_init(const station_config_t *cfg);
 // clock is established promptly.
 bool lora_cycle(const station_config_t *cfg);
 
+// Seconds until the next periodic cycle is due (0 = due now). Lets the
+// supervisor cap its nap so lora_period_s is honoured while sleeping.
+uint32_t lora_secs_until_due(const station_config_t *cfg);
+
 // Fetch (and clear) a CONFIG TLV received in the last downlink. Returns true and
 // copies up to `cap` bytes into buf/*len when one is pending. The supervisor
 // applies it to the BLE-owned cfg (lora_apply_config_tlv) and persists.
