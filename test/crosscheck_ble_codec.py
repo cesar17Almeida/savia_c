@@ -87,10 +87,12 @@ def check():
     # 5) status (incl. the LoRa link block + mode/irrigation/actuators)
     st = load("status")
     assert set(st.keys()) == {"v", "fw", "mode", "irrigation_hour", "act",
+                              "now_ms", "utc_offset_min",
                               "uptime_s", "last_sync_ms", "weather_updated_ms", "lora"}
     assert st["v"] == 1 and st["fw"] == "0.1.0-c" and st["uptime_s"] == 12345
     assert st["mode"] == "forward" and st["irrigation_hour"] == 6
     assert st["act"] == []   # default config has no actuator slots
+    assert st["now_ms"] == 1700000012345 and st["utc_offset_min"] == 0
     assert st["last_sync_ms"] == 1700000000000 and st["weather_updated_ms"] is None
     lora = st["lora"]
     assert set(lora.keys()) == {"inited", "joined", "rssi", "snr", "last_ms", "module", "seq"}
@@ -114,7 +116,7 @@ def check():
     assert cfg["deep_sleep"] is False   # default OFF
     assert cfg["capture_s"] == 3600 and cfg["daily_hour"] == 20
     assert cfg["lora_period_s"] == 3600   # default 1 h LoRa cycle
-    assert cfg["mock"] is True and cfg["log_level"] == 1   # dev defaults
+    assert cfg["mock"] is False and cfg["log_level"] == 1   # mock OFF by default (client-only)
     # v7: runtime mode + local-time schedule + coords (the C test sets Valencia).
     assert cfg["inference_mode"] == "forward" and cfg["infer_dev"] is False
     assert cfg["utc_offset_min"] == 0 and cfg["irrigation_hour"] == 6

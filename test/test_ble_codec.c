@@ -177,7 +177,8 @@ int main(void) {
                           .rssi_dbm = -106, .snr_ddb = 70,
                           .last_signal_ms = 1700000000000ULL,
                           .module = "v4.0.11", .seq = 3 };
-    l = ble_serialize_status(&cfg, 12345, 1700000000000ULL, 0, &lst, buf, sizeof(buf));
+    l = ble_serialize_status(&cfg, 12345, 1700000012345ULL, 1700000000000ULL, 0,
+                             &lst, buf, sizeof(buf));
     assert(l > 0);
     write_file("/tmp/savia_status.cbor", buf, l);
     l = ble_serialize_count(42, buf, sizeof(buf));

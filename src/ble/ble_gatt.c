@@ -500,10 +500,12 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
                                              offset, buffer, buffer_size);
     }
     if (att_handle == H_STATUS) {
-        uint8_t tmp[192];   // +lora{} block
-        uint32_t up_s = (uint32_t)(to_ms_since_boot(get_absolute_time()) / 1000);
+        uint8_t tmp[256];   // +lora{} block +now_ms/utc_offset_min
+        uint64_t up_ms = to_ms_since_boot(get_absolute_time());
+        uint32_t up_s = (uint32_t)(up_ms / 1000);
         lora_status_t ls; lora_get_status(&ls);
-        size_t n = ble_serialize_status(g_cfg, up_s, clock_last_sync_ms(),
+        uint64_t now_ms = clock_is_set() ? clock_now(up_ms) : 0;
+        size_t n = ble_serialize_status(g_cfg, up_s, now_ms, clock_last_sync_ms(),
                                         g_weather_updated_ms, &ls, tmp, sizeof(tmp));
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
     }

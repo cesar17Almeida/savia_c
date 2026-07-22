@@ -29,8 +29,9 @@ void config_load_defaults(station_config_t *cfg) {
     cfg->inference_mode = SAVIA_INFER_FORWARD;
     cfg->has_coords = false;       // installer sets coords from the app
 
-    // Dev: mock data ON during bring-up; INFO logs.
-    cfg->mock_enabled = true;
+    // Mock data OFF by default -- the station reads the real sensor out of the box.
+    // Only the client (TerraLink over BLE) may turn mock on; see ble_gatt config write.
+    cfg->mock_enabled = false;
     cfg->log_level = 1;            // SAVIA_LOG_INFO
 
     // AquaCheck SDI-12 probe, addr '0'. Default pin GP2; the real pin is set from

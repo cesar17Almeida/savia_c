@@ -22,7 +22,7 @@ size_t ble_serialize_aggregations(const savia_aggregate_t *rows, size_t n,
 size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
                                  uint8_t *out, size_t cap);  // [{ts_ms,model,kind,port,value,confidence}]
 size_t ble_serialize_status(const station_config_t *cfg,
-                            uint32_t uptime_s, uint64_t last_sync_ms,
+                            uint32_t uptime_s, uint64_t now_ms, uint64_t last_sync_ms,
                             uint64_t weather_updated_ms, const lora_status_t *lora,
                             uint8_t *out, size_t cap);
 size_t ble_serialize_count(uint64_t count, uint8_t *out, size_t cap);  // {count:N}

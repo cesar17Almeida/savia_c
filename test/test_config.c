@@ -18,7 +18,7 @@ int main(void) {
     assert(cfg.wake_button_gpio == 15);
     assert(cfg.capture_interval_s == 3600);
     assert(cfg.daily_hour == 20);
-    assert(cfg.mock_enabled == true);
+    assert(cfg.mock_enabled == false);   // mock OFF by default; only the client enables it
     assert(cfg.log_level == 1);
 
     // One AquaCheck SDI-12 sensor on a configurable pin.

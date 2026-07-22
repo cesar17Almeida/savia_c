@@ -290,17 +290,22 @@ size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
 }
 
 size_t ble_serialize_status(const station_config_t *cfg,
-                            uint32_t uptime_s, uint64_t last_sync_ms,
+                            uint32_t uptime_s, uint64_t now_ms, uint64_t last_sync_ms,
                             uint64_t weather_updated_ms, const lora_status_t *lora,
                             uint8_t *out, size_t cap) {
     cbor_writer_t w;
     cbor_w_init(&w, out, cap);
-    cbor_w_map(&w, 9);
+    cbor_w_map(&w, 11);
     cbor_w_textz(&w, "v");        cbor_w_uint(&w, SAVIA_PROTOCOL_VERSION);
     cbor_w_textz(&w, "fw");       cbor_w_textz(&w, SAVIA_FW_VERSION);
     cbor_w_textz(&w, "mode");
     cbor_w_textz(&w, cfg && cfg->inference_mode == SAVIA_INFER_LOCAL ? "local" : "forward");
     cbor_w_textz(&w, "irrigation_hour"); cbor_w_uint(&w, cfg ? cfg->irrigation_hour : 6);
+    // Device wall clock (epoch ms, null until first sync) + configured UTC offset,
+    // so clients can render the station's local time without extra reads.
+    cbor_w_textz(&w, "now_ms");
+    if (now_ms) cbor_w_uint(&w, now_ms); else cbor_w_null(&w);
+    cbor_w_textz(&w, "utc_offset_min"); cbor_w_int(&w, cfg ? cfg->utc_offset_min : 0);
 
     // Actuator slots and their live state ({} entries: port, gpio, on).
     uint8_t nact = 0;
