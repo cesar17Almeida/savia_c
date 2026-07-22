@@ -117,13 +117,17 @@ static void log_flush(void) { stdio_flush(); }
 
 int main(void) {
     stdio_init_all();
+    sleep_ms(2500);   // let the USB-CDC host attach so EARLY boot logs are visible
     savia_log_set_clock(log_clock);   // timestamp every log line
     savia_log_set_flush(log_flush);  // drain USB-CDC per line: no dropped logs
 
     station_config_t cfg;
     config_load_defaults(&cfg);
     if (config_store_load(&cfg)) {
-        printf("config: restored from flash (sleep_s=%u)\n", cfg.sleep_seconds);
+        LOG_INFO("config: restored from flash (sleep=%us capture=%us lora=%us)\n",
+                 cfg.sleep_seconds, cfg.capture_interval_s, cfg.lora_period_s);
+    } else {
+        LOG_WARN("config: no valid record -> factory defaults\n");
     }
     savia_log_set_level(cfg.log_level);
 

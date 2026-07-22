@@ -41,10 +41,24 @@ static uint32_t crc32(const uint8_t *p, size_t n) {
 
 bool config_store_load(station_config_t *cfg) {
     const cfg_record_t *rec = (const cfg_record_t *) (XIP_BASE + CFG_OFFSET);
-    if (rec->magic != CFG_MAGIC ||
-        (rec->version != CFG_VERSION && rec->version != CFG_VERSION_PREV) ||
-        rec->size != sizeof(station_config_t)) return false;
-    if (crc32((const uint8_t *) rec, offsetof(cfg_record_t, crc)) != rec->crc) return false;
+    if (rec->magic != CFG_MAGIC) {
+        LOG_WARN("config_store: no record (magic %08x)\n", (unsigned) rec->magic);
+        return false;
+    }
+    if (rec->version != CFG_VERSION && rec->version != CFG_VERSION_PREV) {
+        LOG_WARN("config_store: version %u unsupported (want %u)\n",
+                 (unsigned) rec->version, (unsigned) CFG_VERSION);
+        return false;
+    }
+    if (rec->size != sizeof(station_config_t)) {
+        LOG_WARN("config_store: size %u != %u (layout changed)\n",
+                 (unsigned) rec->size, (unsigned) sizeof(station_config_t));
+        return false;
+    }
+    if (crc32((const uint8_t *) rec, offsetof(cfg_record_t, crc)) != rec->crc) {
+        LOG_WARN("config_store: CRC mismatch (corrupt record)\n");
+        return false;
+    }
     memcpy(cfg, &rec->cfg, sizeof(*cfg));
     // v7 -> v8: LoRa becomes on-by-default; everything else carries over. The
     // record is rewritten as v8 on the next config_store_save.
