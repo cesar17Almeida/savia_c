@@ -113,9 +113,12 @@ static uint64_t log_clock(bool *wall) {
     return up;
 }
 
+static void log_flush(void) { stdio_flush(); }
+
 int main(void) {
     stdio_init_all();
     savia_log_set_clock(log_clock);   // timestamp every log line
+    savia_log_set_flush(log_flush);  // drain USB-CDC per line: no dropped logs
 
     station_config_t cfg;
     config_load_defaults(&cfg);
@@ -250,6 +253,9 @@ int main(void) {
             }
         }
 
+        if (!live.lora_enabled) {
+            LOG_INFO("LoRa: disabled in cfg, cycle skipped\n");
+        }
         if (live.lora_enabled) {
             lora_cycle(&live);
             // A CONFIG downlink arrived: apply the TLV to the BLE-owned cfg with

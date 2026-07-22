@@ -441,7 +441,10 @@ bool lora_init(const station_config_t *cfg) {
 }
 
 bool lora_cycle(const station_config_t *cfg) {
-    if (!s_ready || !cfg) return false;
+    if (!s_ready || !cfg) {
+        LOG_INFO("LoRa: cycle skip (ready=%d cfg=%d)\n", (int) s_ready, cfg != NULL);
+        return false;
+    }
     uint32_t up = to_ms_since_boot(get_absolute_time());
 
     // Clamp the app-set period so a bad/zero config can't spam the network.
@@ -453,6 +456,7 @@ bool lora_cycle(const station_config_t *cfg) {
     if (s_attempted && (up - s_last_attempt_ms) < period_s * 1000u) return false;
     s_attempted = true;
     s_last_attempt_ms = up;
+    LOG_INFO("LoRa: cycle due (period=%us)\n", (unsigned) period_s);
 
     if (!s_joined) {                       // retry the OTAA join (e.g. after a drop)
         s_joined = lora_join();

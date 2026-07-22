@@ -19,6 +19,9 @@ void savia_log_set_level(int level) { savia_log_level = level; }
 static uint64_t (*s_clock)(bool *wall) = NULL;
 void savia_log_set_clock(uint64_t (*now_ms)(bool *wall)) { s_clock = now_ms; }
 
+static void (*s_flush)(void) = NULL;
+void savia_log_set_flush(void (*flush)(void)) { s_flush = flush; }
+
 // Render the per-line timestamp prefix into `out`; returns its length (0 if no
 // clock). HH:MM:SS once the wall clock is synced, else +Ns since boot.
 static int stamp_prefix(char *out, size_t cap) {
@@ -64,6 +67,7 @@ void savia_log_write(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     printf("%s", buf);   // serial output, unchanged
+    if (s_flush) s_flush();
     ring_push(buf);
 }
 
@@ -73,6 +77,7 @@ void savia_log_hexdump(const char *label, const uint8_t *buf, unsigned len) {
     for (unsigned i = 0; i < len && off > 0 && off < (int) sizeof(line) - 4; i++)
         off += snprintf(line + off, sizeof(line) - (size_t) off, " %02x", buf[i]);
     printf("%s\n", line);
+    if (s_flush) s_flush();
     ring_push(line);
 }
 

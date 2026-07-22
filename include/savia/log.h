@@ -34,6 +34,8 @@ void savia_log_hexdump(const char *label, const uint8_t *buf, unsigned len);
 // + SDK uptime exist (log.c stays SDK-free without it). now_ms() returns ms;
 // *wall=true => epoch ms (shown HH:MM:SS UTC), false => ms-since-boot (shown +Ns).
 void savia_log_set_clock(uint64_t (*now_ms)(bool *wall));
+// Optional post-line flush (Pico: stdio_flush) so USB-CDC never drops lines.
+void savia_log_set_flush(void (*flush)(void));
 
 #define LOG_DEBUG(...) do { if (savia_log_level <= SAVIA_LOG_DEBUG) savia_log_write(__VA_ARGS__); } while (0)
 #define LOG_INFO(...)  do { if (savia_log_level <= SAVIA_LOG_INFO)  savia_log_write(__VA_ARGS__); } while (0)
