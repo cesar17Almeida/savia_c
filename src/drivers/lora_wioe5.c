@@ -354,7 +354,12 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
 
     static const char *ok[]     = { "OK" };
     static const char *okfail[] = { "ERROR" };
-    char cmd[48];
+    // Must hold AT+CMSGHEX="<2 hex chars per payload byte>" for the LARGEST frame:
+    // a 48-byte buffer silently truncated any SOIL with >=2 records (>17 B), so
+    // only the short forecast/cfg_ack frames ever reached TTN.
+    char cmd[16 + 2 * LORA_UPLINK_MAX];
+    _Static_assert(sizeof((char[16 + 2 * LORA_UPLINK_MAX]){0}) >= 14 + 2 * LORA_UPLINK_MAX + 1,
+                   "AT command buffer must fit the largest hex payload");
     snprintf(cmd, sizeof cmd, "AT+PORT=%d", LORA_FPORT);
     at_exec(cmd, ok, 1, okfail, 1, 3000, NULL, 0);
 
