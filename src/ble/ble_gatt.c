@@ -722,6 +722,8 @@ void ble_poll(uint32_t budget_ms) {
     (void) budget_ms;
 }
 
+bool ble_config_dirty_pending(void) { return g_config_dirty; }
+
 bool ble_take_config_dirty(void) {
     if (!g_config_dirty) return false;
     g_config_dirty = false;
@@ -778,6 +780,7 @@ bool ble_is_advertising(void) { return g_advertising; }
 void ble_init(station_config_t *cfg) { (void) cfg; }
 void ble_poll(uint32_t budget_ms) { (void) budget_ms; }
 bool ble_take_config_dirty(void) { return false; }
+bool ble_config_dirty_pending(void) { return false; }
 bool ble_take_lora_ping(void) { return false; }
 bool ble_lora_ping_pending(void) { return false; }
 bool ble_take_infer_trigger(void) { return false; }

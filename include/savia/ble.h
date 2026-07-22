@@ -23,6 +23,7 @@ bool ble_take_config_dirty(void);
 bool ble_take_lora_ping(void);
 // True once (then clears) if the app asked the station to run inference now.
 bool ble_take_infer_trigger(void);
+bool ble_config_dirty_pending(void);  // peek: an unsaved config write is waiting
 // Non-destructive peeks so the light-sleep nap can end early to service a request.
 bool ble_lora_ping_pending(void);
 bool ble_infer_pending(void);
