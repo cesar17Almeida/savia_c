@@ -45,9 +45,11 @@ void config_load_defaults(station_config_t *cfg) {
     // gpio2 is "unused" (0xFF) on every slot; memset(0) above would leave 0 = GP0.
     for (int i = 0; i < SAVIA_MAX_SENSORS; i++) cfg->sensors[i].gpio2 = SAVIA_GPIO_NONE;
 
-    // LoRa off by default (the app enables it / pings on demand). Default pins are
-    // the field wiring: Wio-E5 on UART0 GP16(TX)/GP17(RX). Last-signal fields zeroed.
-    cfg->lora_enabled = false;
+    // LoRa ON by default: the boot uplink is the station's primary time source
+    // (clock + TA ride the downlink), so a fresh station must radio out on first
+    // start without any app step. Default pins are the field wiring: Wio-E5 on
+    // UART0 GP16(TX)/GP17(RX). A missing module just logs a warmup timeout.
+    cfg->lora_enabled = true;
     cfg->lora_uart_tx_gpio = 16;
     cfg->lora_uart_rx_gpio = 17;
     cfg->lora_period_s = 3600;   // 1 h; a private gateway + paid plan lift the TTN FUP

@@ -155,14 +155,15 @@ int main(void) {
     lora_seed_last_signal(cfg.lora_last_rssi_dbm, cfg.lora_last_snr_ddb,
                           cfg.lora_last_signal_ms);
 
-    // Establish time BEFORE the first capture so readings are wall-stamped and any
-    // power-off gap is measured promptly: one immediate LoRa cycle (its downlink
-    // carries the clock) plus a short BLE window for a phone that connects first.
+    // First thing after bring-up: one LoRa cycle, ALWAYS. Its downlink carries the
+    // clock (fresh time even when the LKG ring already seeded one) and flushes any
+    // downlinks queued while the station was off. Then, if the clock is still not
+    // set, hold a short BLE window for a phone that connects first.
+    if (cfg.lora_enabled) lora_cycle(&cfg);
     if (!clock_is_set()) {
-        if (cfg.lora_enabled) lora_cycle(&cfg);
         ble_poll(/*budget_ms=*/3000);
-        clock_persist_if_dirty();
     }
+    clock_persist_if_dirty();
 
     printf("savia_c up: on_device_inference=%d, sensors=%u, sleep=%us, capture=%us, daily_h=%u\n",
            inference_on_device(), cfg.sensor_count, cfg.sleep_seconds,

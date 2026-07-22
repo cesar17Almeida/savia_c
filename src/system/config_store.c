@@ -9,7 +9,8 @@
 #include "pico/flash.h"
 
 #define CFG_MAGIC   0x53564346u                                // 'SVCF'
-#define CFG_VERSION 7u   // bumped: inference_mode, utc_offset_min, irrigation_hour, coords, slot gpio2+unit
+#define CFG_VERSION 8u   // bumped: lora_enabled defaults ON (boot uplink = time source)
+#define CFG_VERSION_PREV 7u   // same struct layout; migrated in-place on load
 #define CFG_OFFSET  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE) // last 4 KB sector
 
 typedef struct {
@@ -40,10 +41,14 @@ static uint32_t crc32(const uint8_t *p, size_t n) {
 
 bool config_store_load(station_config_t *cfg) {
     const cfg_record_t *rec = (const cfg_record_t *) (XIP_BASE + CFG_OFFSET);
-    if (rec->magic != CFG_MAGIC || rec->version != CFG_VERSION ||
+    if (rec->magic != CFG_MAGIC ||
+        (rec->version != CFG_VERSION && rec->version != CFG_VERSION_PREV) ||
         rec->size != sizeof(station_config_t)) return false;
     if (crc32((const uint8_t *) rec, offsetof(cfg_record_t, crc)) != rec->crc) return false;
     memcpy(cfg, &rec->cfg, sizeof(*cfg));
+    // v7 -> v8: LoRa becomes on-by-default; everything else carries over. The
+    // record is rewritten as v8 on the next config_store_save.
+    if (rec->version == CFG_VERSION_PREV) cfg->lora_enabled = true;
     return true;
 }
 
