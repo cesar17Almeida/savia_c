@@ -22,6 +22,10 @@ BLE ?= ON
 # Para la Pico W (RP2040): make build BOARD=pico_w INFER=OFF
 INFER ?= ON
 
+# Credenciales OTAA locales (ver .env.example). Fichero ignorado por git: si no
+# existe, las variables quedan vacias y el firmware usa placeholders a cero.
+-include .env
+
 BUILD := build-$(BOARD)
 INFER_TAG := $(if $(filter ON,$(INFER)),on,off)
 UF2 := $(BUILD)/savia_c-$(BOARD)-ml$(INFER_TAG)device.uf2
@@ -33,7 +37,10 @@ UF2 := $(BUILD)/savia_c-$(BOARD)-ml$(INFER_TAG)device.uf2
 # BOARD/BLE/INFER se aplique, y luego construye.
 build:
 	cmake -S . -B $(BUILD) -G Ninja \
-	  -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER)
+	  -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER) \
+	  -DSAVIA_LORA_DEV_EUI=$(LORA_DEV_EUI) \
+	  -DSAVIA_LORA_APP_EUI=$(LORA_APP_EUI) \
+	  -DSAVIA_LORA_APP_KEY=$(LORA_APP_KEY)
 	ninja -C $(BUILD)
 	@echo "==> $(UF2)"
 

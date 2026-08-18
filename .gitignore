@@ -20,3 +20,6 @@ pico-sdk/
 .vscode/
 .DS_Store
 *.swp
+
+# Credenciales locales (OTAA de TTN). Nunca se commitean.
+.env

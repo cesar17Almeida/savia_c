@@ -20,12 +20,23 @@
 //   - downlink: clock + air-temperature forecast -> clock_set + weather_set,
 //     so the LSTM gets its TA window even with no phone around.
 //
-// OTAA credentials for the TTN end device "savia" (EU868, eu1 cluster). JoinEUI is
-// all-zeros (TTN default). The AppKey is a real secret -- keep this repo private.
-// The counterpart backend (TTN API + Open-Meteo) is a separate phase-2 piece.
-#define LORA_DEV_EUI  "70B3D57ED007832E"
-#define LORA_APP_EUI  "0000000000000000"   // a.k.a. JoinEUI
-#define LORA_APP_KEY  "F2E1ACBA7ECA737A452D9031507B6309"
+// OTAA credentials for the TTN end device (EU868, eu1 cluster). They are SECRETS and
+// must never be committed: put them in a local .env (see .env.example), which the
+// Makefile forwards to CMake as -DSAVIA_LORA_*. Without it the build falls back to the
+// all-zeros placeholders below, which compile and run but never join a real network.
+#ifndef SAVIA_LORA_DEV_EUI
+#define SAVIA_LORA_DEV_EUI "0000000000000000"
+#endif
+#ifndef SAVIA_LORA_APP_EUI
+#define SAVIA_LORA_APP_EUI "0000000000000000"   // a.k.a. JoinEUI; all-zeros is the TTN default
+#endif
+#ifndef SAVIA_LORA_APP_KEY
+#define SAVIA_LORA_APP_KEY "00000000000000000000000000000000"
+#endif
+
+#define LORA_DEV_EUI  SAVIA_LORA_DEV_EUI
+#define LORA_APP_EUI  SAVIA_LORA_APP_EUI
+#define LORA_APP_KEY  SAVIA_LORA_APP_KEY
 #define LORA_REGION   "EU868"              // AT+DR=<region> band (Spain)
 #define LORA_FPORT    8                    // application FPort (1..223)
 #define LORA_BAUD     9600

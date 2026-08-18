@@ -77,6 +77,14 @@ if(NOT DEFINED SAVIA_LOG_LEVEL)
 endif()
 target_compile_definitions(savia_c PRIVATE SAVIA_LOG_LEVEL=${SAVIA_LOG_LEVEL})
 
+# Credenciales OTAA de TTN: NUNCA en el fuente. Llegan del .env local via Makefile
+# (-DSAVIA_LORA_APP_KEY=...). Si no se pasan, lora_wioe5.c usa placeholders a cero.
+foreach(_cred SAVIA_LORA_DEV_EUI SAVIA_LORA_APP_EUI SAVIA_LORA_APP_KEY)
+  if(${_cred})
+    target_compile_definitions(savia_c PRIVATE ${_cred}="${${_cred}}")
+  endif()
+endforeach()
+
 # Nombre del binario según placa + ubicación de la inferencia, para no mezclarlos.
 if(SAVIA_ON_DEVICE_INFERENCE)
   target_compile_definitions(savia_c PRIVATE SAVIA_ON_DEVICE_INFERENCE=1)
