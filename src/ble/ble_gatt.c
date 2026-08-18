@@ -263,13 +263,24 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
         sdi12_get_console_result(&sr);
         g_resp_len = ble_serialize_sdi12_result(&sr, g_resp, sizeof(g_resp));
     } else if (strcmp(dr.op, SAVIA_OP_ACT) == 0) {   // actuator switch request
-        if (dr.has_port && dr.has_on) {
+        // The count is the app's only answer here, so it must mean something:
+        // 1 = queued for the supervisor, 0 = refused (unknown port, or a slot that
+        // is not a digital actuator). Acking 1 unconditionally made a bad port look
+        // exactly like a real switch.
+        bool valid = dr.has_port && dr.has_on && g_cfg &&
+                     dr.port >= 1 && dr.port <= SAVIA_MAX_SENSORS &&
+                     dr.port <= g_cfg->sensor_count &&
+                     g_cfg->sensors[dr.port - 1].type == SENSOR_ACTUATOR_DIGITAL;
+        if (valid) {
             g_act_port = dr.port;
             g_act_on = dr.on;
             g_act_pending = true;
             LOG_INFO("BLE: act queued: port %u -> %s\n", dr.port, dr.on ? "ON" : "OFF");
+        } else {
+            LOG_WARN("BLE: act refused: port %u is not a configured actuator\n",
+                     (unsigned) (dr.has_port ? dr.port : 0));
         }
-        g_resp_len = ble_serialize_count(1, g_resp, sizeof(g_resp));   // queued ack
+        g_resp_len = ble_serialize_count(valid ? 1 : 0, g_resp, sizeof(g_resp));
     } else if (strcmp(dr.op, SAVIA_OP_INFER) == 0) { // ask IoT station to make inference
         // Ack "queued" (1) only if the run will actually happen: on-device build
         // AND LOCAL mode. In FORWARD mode the app runs the model, so ack 0.
@@ -309,6 +320,21 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
 }
 
 // --- config (0013) write ----------------------------------------------------
+
+// Queue the ack (config_ok, or config_err + reason) for the next can-send-now
+// slot. EVERY path that swallows a config write must call this: an unanswered
+// write leaves the app unable to tell "applied" from "refused".
+static void config_ack_send(bool ok, const char *err) {
+    if (!ok) LOG_INFO("BLE: bad config (%s)\n", err ? err : "?");
+
+    uint32_t cur_s  = g_cfg ? g_cfg->sleep_seconds : 0;
+    bool     cur_ds = g_cfg ? g_cfg->deep_sleep_enabled : false;
+    g_cfg_ack_len = ble_serialize_config_ack(ok, cur_s, cur_ds, err, g_cfg_ack, sizeof(g_cfg_ack));
+    if (g_con != HCI_CON_HANDLE_INVALID && g_config_notify_on && g_cfg_ack_len) {
+        g_cfg_ack_pending = true;
+        att_server_request_can_send_now_event(g_con);
+    }
+}
 
 static void handle_config_write(const uint8_t *buf, uint16_t len) {
     ble_config_patch_t cp;
@@ -435,15 +461,7 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
                      cp.has_sensors ? "yes" : "no", g_cfg->ble_name);
         }
     }
-    if (!ok) LOG_INFO("BLE: bad config (%s)\n", err ? err : "?");
-
-    uint32_t cur_s  = g_cfg ? g_cfg->sleep_seconds : 0;
-    bool     cur_ds = g_cfg ? g_cfg->deep_sleep_enabled : false;
-    g_cfg_ack_len = ble_serialize_config_ack(ok, cur_s, cur_ds, err, g_cfg_ack, sizeof(g_cfg_ack));
-    if (g_con != HCI_CON_HANDLE_INVALID && g_config_notify_on && g_cfg_ack_len) {
-        g_cfg_ack_pending = true;
-        att_server_request_can_send_now_event(g_con);
-    }
+    config_ack_send(ok, err);
 }
 
 // --- auth (0014) write. The app confirms by re-reading the auth state. -------
@@ -558,6 +576,9 @@ static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_m
     bool locked = g_cfg && auth_key_is_set(g_cfg->auth_key) && !g_authed;
     if (locked && att_handle != H_AUTH) {
         LOG_INFO("BLE: write locked (auth required)\n");
+        // Answer the config channel instead of dropping it silently -- otherwise the
+        // app can only infer the refusal from an unchanged snapshot.
+        if (att_handle == H_CONFIG) config_ack_send(false, "auth required");
         return 0;
     }
 
