@@ -194,6 +194,9 @@ bool lora_apply_config_tlv(const uint8_t *tlv, size_t len, station_config_t *cfg
             case LORA_CFG_DAILY_HOUR:
                 if (v <= 23) { cfg->daily_hour = (uint8_t) v; ok++; } else bad++;
                 break;
+            case LORA_CFG_DAILY_MIN:
+                if (v <= 59) { cfg->daily_min = (uint8_t) v; ok++; } else bad++;
+                break;
             case LORA_CFG_LORA_PERIOD_S:
                 if (v >= SAVIA_LORA_PERIOD_MIN_S && v <= SAVIA_LORA_PERIOD_MAX_S) { cfg->lora_period_s = v; ok++; }
                 else bad++;
@@ -211,9 +214,6 @@ bool lora_apply_config_tlv(const uint8_t *tlv, size_t len, station_config_t *cfg
                 } else bad++;
                 break;
             }
-            case LORA_CFG_IRRIGATION_HOUR:
-                if (v <= 23) { cfg->irrigation_hour = (uint8_t) v; ok++; } else bad++;
-                break;
             case LORA_CFG_LAT: {
                 int32_t lat = (int32_t) v;
                 if (vlen == 4 && lat >= -900000000 && lat <= 900000000) {

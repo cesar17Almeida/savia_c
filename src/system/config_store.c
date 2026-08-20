@@ -9,8 +9,15 @@
 #include "pico/flash.h"
 
 #define CFG_MAGIC   0x53564346u                                // 'SVCF'
-#define CFG_VERSION 8u   // bumped: lora_enabled defaults ON (boot uplink = time source)
-#define CFG_VERSION_PREV 7u   // same struct layout; migrated in-place on load
+// Bumped to 12 for daily_min (the daily cycle gained minute resolution). The size
+// guard below would reject a v11 record anyway -- station_config_t grew a byte --
+// so there is nothing to migrate: it is the same fresh-start deal as v10.
+// Bumped to 10 with NO backward migration on purpose: defaults ship an empty
+// sensor table now, and a v8/v9 record would carry the old AquaCheck slot back in.
+// Rejecting them makes the next boot a genuinely fresh station -- at the cost of
+// the stored BLE password, coords and sensor pins, which the installer re-enters
+// from TerraLink (LoRa falls back to GP16/17, the field wiring).
+#define CFG_VERSION 12u
 #define CFG_OFFSET  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE) // last 4 KB sector
 
 typedef struct {
@@ -45,7 +52,7 @@ bool config_store_load(station_config_t *cfg) {
         LOG_WARN("config_store: no record (magic %08x)\n", (unsigned) rec->magic);
         return false;
     }
-    if (rec->version != CFG_VERSION && rec->version != CFG_VERSION_PREV) {
+    if (rec->version != CFG_VERSION) {
         LOG_WARN("config_store: version %u unsupported (want %u)\n",
                  (unsigned) rec->version, (unsigned) CFG_VERSION);
         return false;
@@ -60,9 +67,6 @@ bool config_store_load(station_config_t *cfg) {
         return false;
     }
     memcpy(cfg, &rec->cfg, sizeof(*cfg));
-    // v7 -> v8: LoRa becomes on-by-default; everything else carries over. The
-    // record is rewritten as v8 on the next config_store_save.
-    if (rec->version == CFG_VERSION_PREV) cfg->lora_enabled = true;
     return true;
 }
 

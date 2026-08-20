@@ -2,6 +2,7 @@
 #include "savia/cbor.h"
 #include "savia/protocol.h"
 #include "savia/pinmap.h"
+#include "savia/sensor_catalog.h"
 #include "savia/actuator.h"
 #include "savia/weather.h"
 #include <string.h>
@@ -295,12 +296,11 @@ size_t ble_serialize_status(const station_config_t *cfg,
                             uint8_t *out, size_t cap) {
     cbor_writer_t w;
     cbor_w_init(&w, out, cap);
-    cbor_w_map(&w, 11);
+    cbor_w_map(&w, 10);
     cbor_w_textz(&w, "v");        cbor_w_uint(&w, SAVIA_PROTOCOL_VERSION);
     cbor_w_textz(&w, "fw");       cbor_w_textz(&w, SAVIA_FW_VERSION);
     cbor_w_textz(&w, "mode");
     cbor_w_textz(&w, cfg && cfg->inference_mode == SAVIA_INFER_LOCAL ? "local" : "forward");
-    cbor_w_textz(&w, "irrigation_hour"); cbor_w_uint(&w, cfg ? cfg->irrigation_hour : 6);
     // Device wall clock (epoch ms, null until first sync) + configured UTC offset,
     // so clients can render the station's local time without extra reads.
     cbor_w_textz(&w, "now_ms");
@@ -309,7 +309,7 @@ size_t ble_serialize_status(const station_config_t *cfg,
 
     // Actuator slots and their live state ({} entries: port, gpio, on).
     uint8_t nact = 0;
-    uint8_t ns = cfg && cfg->sensor_count <= SAVIA_MAX_SENSORS ? cfg->sensor_count : 0;
+    uint8_t ns = cfg ? SAVIA_MAX_SENSORS : 0;
     for (uint8_t i = 0; i < ns; i++)
         if (cfg->sensors[i].type == SENSOR_ACTUATOR_DIGITAL) nact++;
     cbor_w_textz(&w, "act");
@@ -447,30 +447,6 @@ bool ble_parse_weather(const uint8_t *buf, size_t len, float *past_ta, uint8_t *
 
 // --- config characteristic (0013) -------------------------------------------
 
-static const char *sensor_type_str(savia_sensor_type_t t) {
-    switch (t) {
-        case SENSOR_SDI12_AQUACHECK:  return "sdi12_aquacheck";
-        case SENSOR_SDI12_GENERIC:    return "sdi12_generic";
-        case SENSOR_ANALOG_LINEAR:    return "analog_linear";
-        case SENSOR_ONEWIRE_DS18B20:  return "onewire_ds18b20";
-        case SENSOR_DHT11:            return "dht11";
-        case SENSOR_HCSR04:           return "hc_sr04";
-        case SENSOR_ACTUATOR_DIGITAL: return "actuator";
-        default:                      return "none";
-    }
-}
-
-static savia_sensor_type_t sensor_type_from_str(const char *s, size_t n) {
-    if (cbor_text_eq(s, n, "sdi12_aquacheck")) return SENSOR_SDI12_AQUACHECK;
-    if (cbor_text_eq(s, n, "sdi12_generic"))   return SENSOR_SDI12_GENERIC;
-    if (cbor_text_eq(s, n, "analog_linear"))   return SENSOR_ANALOG_LINEAR;
-    if (cbor_text_eq(s, n, "onewire_ds18b20")) return SENSOR_ONEWIRE_DS18B20;
-    if (cbor_text_eq(s, n, "dht11"))           return SENSOR_DHT11;
-    if (cbor_text_eq(s, n, "hc_sr04"))         return SENSOR_HCSR04;
-    if (cbor_text_eq(s, n, "actuator"))        return SENSOR_ACTUATOR_DIGITAL;
-    return SENSOR_NONE;
-}
-
 size_t ble_serialize_config(const savia_device_id_t *dev,
                             const station_config_t *cfg, bool infer_dev,
                             uint8_t *out, size_t cap) {
@@ -492,6 +468,7 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
     cbor_w_textz(&w, "deep_sleep"); cbor_w_bool(&w, cfg->deep_sleep_enabled);
     cbor_w_textz(&w, "capture_s");  cbor_w_uint(&w, cfg->capture_interval_s);
     cbor_w_textz(&w, "daily_hour"); cbor_w_uint(&w, cfg->daily_hour);
+    cbor_w_textz(&w, "daily_min");  cbor_w_uint(&w, cfg->daily_min);
     cbor_w_textz(&w, "mock");       cbor_w_bool(&w, cfg->mock_enabled);
     cbor_w_textz(&w, "log_level");  cbor_w_uint(&w, cfg->log_level);
     cbor_w_textz(&w, "wake_gpio");  cbor_w_uint(&w, cfg->wake_button_gpio);
@@ -500,7 +477,6 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
     cbor_w_textz(&w, cfg->inference_mode == SAVIA_INFER_LOCAL ? "local" : "forward");
     cbor_w_textz(&w, "infer_dev");  cbor_w_bool(&w, infer_dev);   // build capability (RO)
     cbor_w_textz(&w, "utc_offset_min"); cbor_w_int(&w, cfg->utc_offset_min);
-    cbor_w_textz(&w, "irrigation_hour"); cbor_w_uint(&w, cfg->irrigation_hour);
     cbor_w_textz(&w, "lat");
     if (cfg->has_coords) cbor_w_double(&w, cfg->lat_e7 / 1e7); else cbor_w_null(&w);
     cbor_w_textz(&w, "lon");
@@ -510,42 +486,46 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
     // (fixed layout); the other types also carry the installer-supplied decoding so
     // the app can show it and re-send it unchanged: analog -> kind/depth/scale/offset,
     // 1-Wire -> kind/depth, SDI-12 generic -> chan[] of {kind,depth}.
-    uint8_t nsens = cfg->sensor_count <= SAVIA_MAX_SENSORS ? cfg->sensor_count : SAVIA_MAX_SENSORS;
+    // Slot-addressed table: only occupied slots travel, each tagged with its port,
+    // so a hole left by a deleted sensor doesn't renumber the ones after it.
+    uint8_t nsens = config_sensor_count(cfg);
     cbor_w_textz(&w, "sensors");
     cbor_w_array(&w, nsens);
-    for (uint8_t i = 0; i < nsens; i++) {
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
         const savia_sensor_slot_t *s = &cfg->sensors[i];
-        bool is_analog  = s->type == SENSOR_ANALOG_LINEAR;
-        bool is_1wire   = s->type == SENSOR_ONEWIRE_DS18B20;
-        bool is_generic = s->type == SENSOR_SDI12_GENERIC;
+        if (!savia_slot_used(s)) continue;
+        uint8_t extra = sensor_type_extra(s->type);
+        bool has_kind  = (extra & SAVIA_SENSOR_KIND_DEPTH) != 0;
+        bool has_curve = (extra & SAVIA_SENSOR_SCALE_OFFSET) != 0;
+        bool has_chan  = (extra & SAVIA_SENSOR_CHANNELS) != 0;
         bool has_gpio2 = s->gpio2 != SAVIA_GPIO_NONE;
         bool has_unit  = s->unit[0] != 0;
         uint8_t fields = 5;                          // port, gpio, type, addr, interval_s
-        if (has_gpio2)             fields += 1;      // gpio2 (HC-SR04 echo)
-        if (has_unit)              fields += 1;      // unit label
-        if (is_analog || is_1wire) fields += 2;      // kind, depth_cm
-        if (is_analog)  fields += 2;                 // scale, offset
-        if (is_generic) fields += 1;                 // chan
+        if (has_gpio2)  fields += 1;                 // gpio2 (second data pin)
+        if (has_unit)   fields += 1;                 // unit label
+        if (has_kind)   fields += 2;                 // kind, depth_cm
+        if (has_curve)  fields += 2;                 // scale, offset
+        if (has_chan)   fields += 1;                 // chan
 
         cbor_w_map(&w, fields);
         cbor_w_textz(&w, "port"); cbor_w_uint(&w, (uint64_t)(i + 1));
         cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, s->gpio);
         if (has_gpio2) { cbor_w_textz(&w, "gpio2"); cbor_w_uint(&w, s->gpio2); }
-        cbor_w_textz(&w, "type"); cbor_w_textz(&w, sensor_type_str(s->type));
+        cbor_w_textz(&w, "type"); cbor_w_textz(&w, sensor_type_token(s->type));
         char addr[2] = { s->address, 0 };
         cbor_w_textz(&w, "addr"); cbor_w_textz(&w, addr);
         if (has_unit) { cbor_w_textz(&w, "unit"); cbor_w_textz(&w, s->unit); }
         // per-sensor cadence (0 = follow the global capture_s); always sent so the app can show/edit it.
         cbor_w_textz(&w, "interval_s"); cbor_w_uint(&w, s->sample_interval_s);
-        if (is_analog || is_1wire) {
+        if (has_kind) {
             cbor_w_textz(&w, "kind");     cbor_w_textz(&w, kind_str(s->kind));
             cbor_w_textz(&w, "depth_cm"); cbor_w_uint(&w, s->depth_cm);
         }
-        if (is_analog) {
+        if (has_curve) {
             cbor_w_textz(&w, "scale");  cbor_w_double(&w, (double) s->map.analog.scale);
             cbor_w_textz(&w, "offset"); cbor_w_double(&w, (double) s->map.analog.offset);
         }
-        if (is_generic) {
+        if (has_chan) {
             uint8_t cc = s->map.sdi12.count <= SAVIA_SDI12_MAX_CHANNELS
                        ? s->map.sdi12.count : SAVIA_SDI12_MAX_CHANNELS;
             cbor_w_textz(&w, "chan");
@@ -605,8 +585,11 @@ size_t ble_serialize_pinmap(const station_config_t *cfg, uint8_t *out, size_t ca
 // Parse one sensor entry {gpio, type, addr?, interval_s?, kind?, depth_cm?, scale?,
 // offset?, chan?:[{kind,depth_cm}]} into *slot. "port" and unknown keys are skipped. An
 // unknown type string yields SENSOR_NONE. Returns false only on malformed CBOR.
-static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot) {
+// `port_out` receives the slot the app asked for (1..SAVIA_MAX_SENSORS), or 0 when
+// the entry carries no port -- an older app that still relies on array order.
+static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot, uint8_t *port_out) {
     memset(slot, 0, sizeof(*slot));
+    *port_out = 0;
     slot->gpio2 = SAVIA_GPIO_NONE;   // memset(0) would mean GP0, not "unused"
     bool has_kind = false;
     // Buffer the type-specific (union) fields and resolve them against `type` only
@@ -625,7 +608,9 @@ static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot) {
         else if (f >= fcount) break;
         const char *fk; size_t fkn;
         if (!cbor_r_text(r, &fk, &fkn)) return false;
-        if (cbor_text_eq(fk, fkn, "gpio")) {
+        if (cbor_text_eq(fk, fkn, "port")) {
+            if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; *port_out = (uint8_t) v; }
+        } else if (cbor_text_eq(fk, fkn, "gpio")) {
             uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->gpio = (uint8_t) v;
         } else if (cbor_text_eq(fk, fkn, "gpio2")) {
             if (!cbor_r_null(r)) {          // null/absent -> stays SAVIA_GPIO_NONE
@@ -639,7 +624,7 @@ static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot) {
             }
         } else if (cbor_text_eq(fk, fkn, "type")) {
             const char *s; size_t sn; if (!cbor_r_text(r, &s, &sn)) return false;
-            slot->type = sensor_type_from_str(s, sn);
+            slot->type = sensor_type_from_token(s, sn);
         } else if (cbor_text_eq(fk, fkn, "addr")) {
             const char *s; size_t sn; if (!cbor_r_text(r, &s, &sn)) return false;
             slot->address = sn > 0 ? s[0] : 0;
@@ -683,10 +668,11 @@ static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot) {
 
     // Commit ONLY the union arm that matches the resolved type; the other arm stays
     // zeroed (from the memset), so a slot can never hold two arms at once.
-    if (slot->type == SENSOR_ANALOG_LINEAR) {
+    uint8_t extra = sensor_type_extra(slot->type);
+    if (extra & SAVIA_SENSOR_SCALE_OFFSET) {
         slot->map.analog.scale = a_scale;
         slot->map.analog.offset = a_offset;
-    } else if (slot->type == SENSOR_SDI12_GENERIC) {
+    } else if (extra & SAVIA_SENSOR_CHANNELS) {
         slot->map.sdi12.count = chan_count;
         for (uint8_t i = 0; i < chan_count; i++) slot->map.sdi12.ch[i] = chans[i];
     }
@@ -737,6 +723,11 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
                 uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
                 out->daily_hour = (uint8_t) v; out->has_daily_hour = true;
             }
+        } else if (cbor_text_eq(k, kn, "daily_min")) {
+            if (!cbor_r_null(&r)) {
+                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                out->daily_min = (uint8_t) v; out->has_daily_min = true;
+            }
         } else if (cbor_text_eq(k, kn, "mock")) {
             bool b;
             if (cbor_r_bool(&r, &b)) { out->mock = b; out->has_mock = true; }
@@ -763,11 +754,6 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
                 double d; if (!cbor_r_double(&r, &d)) return false;   // accepts negint
                 out->utc_offset_min = (int16_t) d; out->has_utc_offset = true;
             }
-        } else if (cbor_text_eq(k, kn, "irrigation_hour")) {
-            if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
-                out->irrigation_hour = (uint8_t) v; out->has_irrigation_hour = true;
-            }
         } else if (cbor_text_eq(k, kn, "lat")) {
             out->has_lat = true;
             if (cbor_r_null(&r)) out->lat_null = true;
@@ -786,15 +772,34 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
             if (!cbor_r_null(&r)) {                       // null -> leave slots untouched
                 uint64_t acount;
                 if (!cbor_r_array(&r, &acount)) return false;
-                uint8_t ni = 0;
+                // Full replacement of a SLOT-ADDRESSED table: start every slot empty,
+                // then drop each entry into the port it names. Slots nobody claims
+                // stay free, which is how a deletion travels.
+                for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+                    memset(&out->sensors[i], 0, sizeof(out->sensors[i]));
+                    out->sensors[i].gpio2 = SAVIA_GPIO_NONE;
+                }
+                bool taken[SAVIA_MAX_SENSORS] = { false };
+                uint8_t next_free = 0;
                 for (uint64_t j = 0; ; j++) {
                     if (acount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
                     else if (j >= acount) break;
-                    savia_sensor_slot_t slot;
-                    if (!parse_sensor_slot(&r, &slot)) return false;
-                    if (ni < SAVIA_MAX_SENSORS) out->sensors[ni++] = slot;   // extras dropped
+                    savia_sensor_slot_t slot; uint8_t port;
+                    if (!parse_sensor_slot(&r, &slot, &port)) return false;
+                    uint8_t idx;
+                    if (port == 0) {                       // no port: next free slot
+                        while (next_free < SAVIA_MAX_SENSORS && taken[next_free]) next_free++;
+                        if (next_free >= SAVIA_MAX_SENSORS) continue;   // extras dropped
+                        idx = next_free;
+                    } else if (port <= SAVIA_MAX_SENSORS) {
+                        idx = (uint8_t)(port - 1);
+                    } else {
+                        return false;                      // port out of range
+                    }
+                    if (taken[idx]) return false;          // two sensors on one port
+                    taken[idx] = true;
+                    out->sensors[idx] = slot;
                 }
-                out->sensor_count = ni;
                 out->has_sensors = true;
             }
         } else {

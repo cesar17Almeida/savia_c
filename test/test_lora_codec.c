@@ -102,8 +102,11 @@ int main(void) {
 
     // --- downlink CONFIG TLV: golden frame + apply with clamps ---
     {
-        // sleep_s=600, daily_hour=21, inference_mode=local, utc_offset=+120,
-        // irrigation_hour=25 (REJECTED: >23), unknown id 0x7F (skipped).
+        // sleep_s=600, daily_hour=21, inference_mode=local, utc_offset=+120, then
+        // two ids this firmware has no case for: 0x08 (RETIRED, was irrigation_hour)
+        // and 0x7F (never existed). Both take the same path -- skipped without
+        // counting as rejected, which is the forward-compat rule: a field a newer
+        // backend knows and we do not is not an error.
         const uint8_t frame[] = {
             0x02, 0x02,
             0x01, 0x04, 0x00, 0x00, 0x02, 0x58,
@@ -122,12 +125,11 @@ int main(void) {
         config_load_defaults(&cfg);
         uint8_t ok = 0, bad = 0;
         assert(lora_apply_config_tlv(d.tlv, d.tlv_len, &cfg, &ok, &bad));
-        assert(ok == 4 && bad == 1);
+        assert(ok == 4 && bad == 0);
         assert(cfg.sleep_seconds == 600);
         assert(cfg.daily_hour == 21);
         assert(cfg.inference_mode == SAVIA_INFER_LOCAL);
         assert(cfg.utc_offset_min == 120);
-        assert(cfg.irrigation_hour == 6);      // untouched default
 
         // negative offset via i16 two's complement: -300 = 0xFED4
         const uint8_t neg[] = { 0x07, 0x02, 0xFE, 0xD4 };
@@ -150,6 +152,17 @@ int main(void) {
                                    0x0B, 0x01, 0x00 };
         assert(lora_apply_config_tlv(badlen, sizeof badlen, &cfg, &ok, &bad));
         assert(ok == 1 && bad == 1 && cfg.log_level == 0);
+
+        // daily_min (0x0C) is its own field, so the golden above stays valid and a
+        // backend that only knows daily_hour keeps working: the pair is set
+        // independently and the minute defaults to 0.
+        const uint8_t dmin[] = { 0x0C, 0x01, 0x1E };            // 30
+        assert(lora_apply_config_tlv(dmin, sizeof dmin, &cfg, &ok, &bad));
+        assert(ok == 1 && bad == 0 && cfg.daily_min == 30);
+        assert(cfg.daily_hour == 21);                           // untouched by the minute
+        const uint8_t dmin_bad[] = { 0x0C, 0x01, 0x3C };        // 60 -> out of range
+        assert(lora_apply_config_tlv(dmin_bad, sizeof dmin_bad, &cfg, &ok, &bad));
+        assert(ok == 0 && bad == 1 && cfg.daily_min == 30);     // unchanged
     }
     printf("test_lora_codec: v2 config TLV OK\n");
 

@@ -92,6 +92,7 @@ int main(void) {
     assert(cp.version == 1 && strcmp(cp.op, "set") == 0 && cp.has_sleep_s && cp.sleep_s == 300);
     assert(cp.has_deep_sleep && cp.deep_sleep == true);
     assert(cp.has_capture_s && cp.capture_s == 120 && cp.has_daily_hour && cp.daily_hour == 6);
+    assert(cp.has_daily_min && cp.daily_min == 45);
     assert(cp.has_mock && cp.mock == true && cp.has_log_level && cp.log_level == 0);
     printf("test_ble_codec: config patch parse OK\n");
 
@@ -172,7 +173,7 @@ int main(void) {
 
     // --- status + count (with a LoRa link block) ---
     station_config_t cfg;
-    config_load_defaults(&cfg);            // FORWARD mode, irrigation 06:00
+    config_load_defaults(&cfg);            // FORWARD mode
     lora_status_t lst = { .inited = true, .joined = true, .has_signal = true,
                           .rssi_dbm = -106, .snr_ddb = 70,
                           .last_signal_ms = 1700000000000ULL,
@@ -191,6 +192,11 @@ int main(void) {
     cfg.has_coords = true;
     cfg.lat_e7 = 394699750;                // 39.4699750 (Valencia)
     cfg.lon_e7 = -3762881;                 // -0.3762881
+    // Defaults now ship an empty sensor table, so place one to keep sensors[]
+    // in the serialized snapshot this fixture cross-checks.
+    cfg.sensors[0].type = SENSOR_SDI12_AQUACHECK;
+    cfg.sensors[0].gpio = 2;
+    cfg.sensors[0].address = '0';
     savia_device_id_t dev = { .model = "Raspberry Pi Pico WH", .mcu = "RP2040",
                               .fw = "0.1.0-c" };
     l = ble_serialize_config(&dev, &cfg, false, buf, sizeof(buf));

@@ -30,7 +30,7 @@ def gen():
     with open("/tmp/savia_config_patch.cbor", "wb") as f:
         f.write(cbor2.dumps({"v": 1, "op": "set", "name": "Huerta-1", "sleep_s": 300,
                              "deep_sleep": True, "capture_s": 120, "daily_hour": 6,
-                             "mock": True, "log_level": 0}))
+                             "daily_min": 45, "mock": True, "log_level": 0}))
     # ingest: timestamped points (mix of air_temperature + soil_moisture w/ depth)
     with open("/tmp/savia_ingest.cbor", "wb") as f:
         f.write(cbor2.dumps({"v": 1, "op": "ingest", "data": [
@@ -84,13 +84,13 @@ def check():
     assert preds[1]["port"] is None and preds[1]["confidence"] is None
     print("check: predictions OK (incl. CBOR null)")
 
-    # 5) status (incl. the LoRa link block + mode/irrigation/actuators)
+    # 5) status (incl. the LoRa link block + mode/actuators)
     st = load("status")
-    assert set(st.keys()) == {"v", "fw", "mode", "irrigation_hour", "act",
+    assert set(st.keys()) == {"v", "fw", "mode", "act",
                               "now_ms", "utc_offset_min",
                               "uptime_s", "last_sync_ms", "weather_updated_ms", "lora"}
     assert st["v"] == 1 and st["fw"] == "0.1.0-c" and st["uptime_s"] == 12345
-    assert st["mode"] == "forward" and st["irrigation_hour"] == 6
+    assert st["mode"] == "forward"
     assert st["act"] == []   # default config has no actuator slots
     assert st["now_ms"] == 1700000012345 and st["utc_offset_min"] == 0
     assert st["last_sync_ms"] == 1700000000000 and st["weather_updated_ms"] is None
@@ -109,17 +109,17 @@ def check():
     # 7) config snapshot (device card + sleep + schedule + sensors + v7 fields)
     cfg = load("config")
     assert set(cfg.keys()) == {"v", "device", "name", "sleep_s", "deep_sleep", "capture_s",
-                               "daily_hour", "mock", "log_level", "wake_gpio", "lora_period_s",
+                               "daily_hour", "daily_min", "mock", "log_level", "wake_gpio", "lora_period_s",
                                "inference_mode", "infer_dev", "utc_offset_min",
-                               "irrigation_hour", "lat", "lon", "sensors"}
+                               "lat", "lon", "sensors"}
     assert cfg["v"] == 1 and cfg["name"] == "Savia" and cfg["sleep_s"] == 3600 and cfg["wake_gpio"] == 15
     assert cfg["deep_sleep"] is False   # default OFF
-    assert cfg["capture_s"] == 3600 and cfg["daily_hour"] == 20
+    assert cfg["capture_s"] == 3600 and cfg["daily_hour"] == 20 and cfg["daily_min"] == 0
     assert cfg["lora_period_s"] == 3600   # default 1 h LoRa cycle
     assert cfg["mock"] is False and cfg["log_level"] == 1   # mock OFF by default (client-only)
     # v7: runtime mode + local-time schedule + coords (the C test sets Valencia).
     assert cfg["inference_mode"] == "forward" and cfg["infer_dev"] is False
-    assert cfg["utc_offset_min"] == 0 and cfg["irrigation_hour"] == 6
+    assert cfg["utc_offset_min"] == 0
     assert abs(cfg["lat"] - 39.4699750) < 1e-6 and abs(cfg["lon"] - (-0.3762881)) < 1e-6
     dev = cfg["device"]
     assert set(dev.keys()) == {"model", "mcu", "fw"}   # liveness lives in status; app maps image by model

@@ -17,17 +17,15 @@ int main(void) {
     assert(cfg.sleep_seconds == 3600);   // 1 h, aligned with hourly capture
     assert(cfg.wake_button_gpio == 15);
     assert(cfg.capture_interval_s == 3600);
-    assert(cfg.daily_hour == 20);
+    assert(cfg.daily_hour == 20 && cfg.daily_min == 0);   // 20:00 LOCAL
     assert(cfg.mock_enabled == false);   // mock OFF by default; only the client enables it
     assert(cfg.log_level == 1);
 
-    // One AquaCheck SDI-12 sensor on a configurable pin.
-    assert(cfg.sensor_count == 1);
-    assert(cfg.sensors[0].type == SENSOR_SDI12_AQUACHECK);
-    assert(cfg.sensors[0].gpio == 2);
-    assert(cfg.sensors[0].address == '0');
+    // Empty sensor table.
+    assert(config_sensor_count(&cfg) == 0);          // fresh station: the app declares the table
 
-    // Remaining slots zeroed; LoRa off by default, pins on the field wiring (UART0).
+    // Every slot zeroed; LoRa off by default, pins on the field wiring (UART0).
+    assert(cfg.sensors[0].type == SENSOR_NONE);
     assert(cfg.sensors[1].type == SENSOR_NONE);
     assert(cfg.lora_enabled == true);   // on by default: boot uplink = time source
     assert(cfg.lora_uart_tx_gpio == 16 && cfg.lora_uart_rx_gpio == 17);
@@ -35,10 +33,11 @@ int main(void) {
     assert(cfg.lora_last_signal_ms == 0);   // no signal persisted yet
 
     // Mode + schedule extensions (v7): FORWARD by default, local-time fields,
-    // informative irrigation at 06:00, no coords until the installer sets them.
+    // no coords until the installer sets them.
+    // Host builds carry no model (SAVIA_ON_DEVICE_INFERENCE undefined), so the
+    // default stays FORWARD here; a pico2_w build defaults to LOCAL.
     assert(cfg.inference_mode == SAVIA_INFER_FORWARD);
     assert(cfg.utc_offset_min == 0);
-    assert(cfg.irrigation_hour == 6);
     assert(cfg.has_coords == false);
     // Slot extensions: gpio2 unused on every slot (0 would mean GP0), empty unit.
     for (int i = 0; i < SAVIA_MAX_SENSORS; i++) {

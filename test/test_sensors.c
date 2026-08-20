@@ -57,6 +57,13 @@ static size_t build_patch(uint8_t *buf, size_t cap) {
     return w.len;
 }
 
+// Occupied slots of a slot-addressed table (holes are SENSOR_NONE).
+static uint8_t slots_used(const savia_sensor_slot_t *slots) {
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) if (slots[i].type != SENSOR_NONE) n++;
+    return n;
+}
+
 int main(void) {
     uint8_t buf[512];
     size_t n = build_patch(buf, sizeof(buf));
@@ -65,7 +72,9 @@ int main(void) {
     ble_config_patch_t cp;
     assert(ble_parse_config_patch(buf, n, &cp));
     assert(cp.ok && cp.version == 1 && strcmp(cp.op, "set") == 0);
-    assert(cp.has_sensors && cp.sensor_count == 4);
+    assert(cp.has_sensors && slots_used(cp.sensors) == 4);
+    // Slot-addressed: four entries without an explicit port fill slots 0..3 in order.
+    assert(cp.sensors[4].type == SENSOR_NONE && cp.sensors[5].type == SENSOR_NONE);
 
     assert(cp.sensors[0].type == SENSOR_SDI12_AQUACHECK &&
            cp.sensors[0].gpio == 2 && cp.sensors[0].address == '0');
@@ -92,16 +101,16 @@ int main(void) {
     station_config_t cfg;
     config_load_defaults(&cfg);
     int bad = 99;
-    assert(pinmap_check_sensors(&cfg, cp.sensors, cp.sensor_count, &bad) == SAVIA_PIN_ASSIGN_OK && bad == -1);
+    assert(pinmap_check_sensors(&cfg, cp.sensors, &bad) == SAVIA_PIN_ASSIGN_OK && bad == -1);
 
-    savia_sensor_slot_t analog_on_bad_pin = cp.sensors[1];
-    analog_on_bad_pin.gpio = 5;     // GP5: no ADC -> INCAPABLE at slot 0
-    assert(pinmap_check_sensors(&cfg, &analog_on_bad_pin, 1, &bad) == SAVIA_PIN_ASSIGN_INCAPABLE && bad == 0);
+    savia_sensor_slot_t one_bad[SAVIA_MAX_SENSORS] = {0};
+    one_bad[0] = cp.sensors[1];
+    one_bad[0].gpio = 5;            // GP5: no ADC -> INCAPABLE at slot 0
+    assert(pinmap_check_sensors(&cfg, one_bad, &bad) == SAVIA_PIN_ASSIGN_INCAPABLE && bad == 0);
     printf("test_sensors: atomic pin validation OK (ok set + ADC-only analog)\n");
 
     // --- serialize a snapshot carrying the new fields (smoke: valid CBOR) ---
-    for (uint8_t i = 0; i < cp.sensor_count; i++) cfg.sensors[i] = cp.sensors[i];
-    cfg.sensor_count = cp.sensor_count;
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) cfg.sensors[i] = cp.sensors[i];
     savia_device_id_t dev = { .model = "Raspberry Pi Pico WH", .mcu = "RP2040", .fw = "0.1.0-c" };
     uint8_t snap[1024];
     size_t sl = ble_serialize_config(&dev, &cfg, false, snap, sizeof(snap));
@@ -129,7 +138,7 @@ int main(void) {
         assert(!w.overflow);
         ble_config_patch_t cp2;
         assert(ble_parse_config_patch(b, w.len, &cp2));
-        assert(cp2.has_sensors && cp2.sensor_count == 1);
+        assert(cp2.has_sensors && slots_used(cp2.sensors) == 1);
         assert(cp2.sensors[0].type == SENSOR_SDI12_GENERIC);
         assert(cp2.sensors[0].map.sdi12.count == 1);                       // NOT aliased by scale
         assert(cp2.sensors[0].map.sdi12.count <= SAVIA_SDI12_MAX_CHANNELS);
@@ -152,7 +161,6 @@ int main(void) {
                 big.sensors[i].map.sdi12.ch[c].depth_cm = 60;
             }
         }
-        big.sensor_count = SAVIA_MAX_SENSORS;
         uint8_t out[2048];
         size_t bl = ble_serialize_config(&dev, &big, false, out, sizeof(out));
         assert(bl > 0 && bl <= 2048);   // must fit ble_gatt.c H_CONFIG tmp[2048]
@@ -186,7 +194,7 @@ int main(void) {
 
         ble_config_patch_t cp3;
         assert(ble_parse_config_patch(b, w.len, &cp3));
-        assert(cp3.has_sensors && cp3.sensor_count == 3);
+        assert(cp3.has_sensors && slots_used(cp3.sensors) == 3);
         assert(cp3.sensors[0].type == SENSOR_DHT11 && cp3.sensors[0].gpio == 8);
         assert(cp3.sensors[0].gpio2 == SAVIA_GPIO_NONE);       // absent -> unused
         assert(cp3.sensors[1].type == SENSOR_HCSR04);
@@ -198,17 +206,109 @@ int main(void) {
         // The set validates against the default reservations, and a snapshot
         // carrying gpio2/unit serializes to well-formed CBOR.
         int bad3 = 99;
-        assert(pinmap_check_sensors(&cfg, cp3.sensors, 3, &bad3) == SAVIA_PIN_ASSIGN_OK);
+        assert(pinmap_check_sensors(&cfg, cp3.sensors, &bad3) == SAVIA_PIN_ASSIGN_OK);
         station_config_t c3;
         config_load_defaults(&c3);
-        for (uint8_t i = 0; i < 3; i++) c3.sensors[i] = cp3.sensors[i];
-        c3.sensor_count = 3;
+        for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) c3.sensors[i] = cp3.sensors[i];
         uint8_t snap3[1024];
         size_t sl3 = ble_serialize_config(&dev, &c3, false, snap3, sizeof(snap3));
         assert(sl3 > 0);
         cbor_reader_t r3; cbor_r_init(&r3, snap3, sl3);
         uint64_t mc3; assert(cbor_r_map(&r3, &mc3));
         printf("test_sensors: new types (dht11 / hc_sr04+gpio2 / actuator) + unit OK\n");
+    }
+
+    // --- slot addressing: a port names the slot, holes survive the round trip ---
+    // This is what stops a delete from renumbering the sensors after it, and with
+    // them the port every stored reading is keyed by.
+    {
+        uint8_t b[256];
+        cbor_writer_t w; cbor_w_init(&w, b, sizeof(b));
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "v");  cbor_w_uint(&w, 1);
+        cbor_w_textz(&w, "op"); cbor_w_textz(&w, "set");
+        // Ports 1 and 3 only: slot 2 is the hole a deleted sensor left behind.
+        cbor_w_textz(&w, "sensors"); cbor_w_array(&w, 2);
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "port"); cbor_w_uint(&w, 1);
+        cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, 8);
+        cbor_w_textz(&w, "type"); cbor_w_textz(&w, "dht11");
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "port"); cbor_w_uint(&w, 3);
+        cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, 9);
+        cbor_w_textz(&w, "type"); cbor_w_textz(&w, "actuator");
+        assert(!w.overflow);
+
+        ble_config_patch_t cps;
+        assert(ble_parse_config_patch(b, w.len, &cps) && cps.has_sensors);
+        assert(cps.sensors[0].type == SENSOR_DHT11 && cps.sensors[0].gpio == 8);
+        assert(cps.sensors[1].type == SENSOR_NONE);              // the hole stays a hole
+        assert(cps.sensors[1].gpio2 == SAVIA_GPIO_NONE);         // and is not GP0
+        assert(cps.sensors[2].type == SENSOR_ACTUATOR_DIGITAL && cps.sensors[2].gpio == 9);
+        assert(slots_used(cps.sensors) == 2);
+
+        // A snapshot of that table re-emits the SAME ports, hole included.
+        station_config_t hc;
+        config_load_defaults(&hc);
+        for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) hc.sensors[i] = cps.sensors[i];
+        uint8_t snap[512];
+        size_t hl = ble_serialize_config(&dev, &hc, false, snap, sizeof(snap));
+        assert(hl > 0);
+        // The wire must carry port 3, not a compacted port 2.
+        bool saw_port3 = false;
+        for (size_t i = 0; i + 6 < hl; i++) {
+            if (memcmp(snap + i, "\x64port", 5) == 0 && snap[i + 5] == 0x03) saw_port3 = true;
+        }
+        assert(saw_port3);
+        printf("test_sensors: slot addressing OK (hole at port 2 survives round trip)\n");
+    }
+
+    // --- slot addressing: malformed port tables are rejected whole ---
+    {
+        uint8_t b[128];
+        for (int variant = 0; variant < 2; variant++) {
+            cbor_writer_t w; cbor_w_init(&w, b, sizeof(b));
+            cbor_w_map(&w, 3);
+            cbor_w_textz(&w, "v");  cbor_w_uint(&w, 1);
+            cbor_w_textz(&w, "op"); cbor_w_textz(&w, "set");
+            cbor_w_textz(&w, "sensors"); cbor_w_array(&w, 2);
+            cbor_w_map(&w, 3);
+            cbor_w_textz(&w, "port"); cbor_w_uint(&w, 2);
+            cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, 8);
+            cbor_w_textz(&w, "type"); cbor_w_textz(&w, "dht11");
+            cbor_w_map(&w, 3);
+            // variant 0: the same port twice. variant 1: a port past the last slot.
+            cbor_w_textz(&w, "port"); cbor_w_uint(&w, variant == 0 ? 2 : SAVIA_MAX_SENSORS + 1);
+            cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, 9);
+            cbor_w_textz(&w, "type"); cbor_w_textz(&w, "actuator");
+            assert(!w.overflow);
+            ble_config_patch_t bad_cp;
+            assert(!ble_parse_config_patch(b, w.len, &bad_cp));
+        }
+        printf("test_sensors: duplicate / out-of-range port rejected\n");
+    }
+
+    // --- a retired wire field must not desync the parser ---
+    // An older TerraLink still sends irrigation_hour (dropped ago-2026). The key has
+    // no branch left, so it takes the fallback (cbor_r_skip): it is ignored and the
+    // fields AROUND it must still land. Getting this wrong would reject the whole
+    // patch, so mixed app/firmware versions are worth a test of their own.
+    {
+        uint8_t b[128];
+        cbor_writer_t w; cbor_w_init(&w, b, sizeof(b));
+        cbor_w_map(&w, 4);
+        cbor_w_textz(&w, "v");               cbor_w_uint(&w, 1);
+        cbor_w_textz(&w, "daily_hour");      cbor_w_uint(&w, 7);
+        cbor_w_textz(&w, "irrigation_hour"); cbor_w_uint(&w, 6);   // retired
+        cbor_w_textz(&w, "capture_s");       cbor_w_uint(&w, 900); // after it
+        assert(!w.overflow);
+
+        ble_config_patch_t old_cp;
+        assert(ble_parse_config_patch(b, w.len, &old_cp));
+        assert(old_cp.has_daily_hour && old_cp.daily_hour == 7);
+        assert(!old_cp.has_daily_min);                             // absent key -> not applied
+        assert(old_cp.has_capture_s && old_cp.capture_s == 900);   // parser stayed in sync
+        printf("test_sensors: retired field skipped, neighbours still applied\n");
     }
 
     printf("test_sensors: OK\n");

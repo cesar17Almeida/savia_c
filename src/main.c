@@ -37,8 +37,12 @@
 // on-device LSTM path can build a complete window under mock: HS10/HS30 come from
 // these readings, TA (past + future) from the weather cache.
 static void seed_mock_readings(void) {
-    const uint64_t base = MOCK_BASE_MS;   // ~20 Jun 2026 UTC (mock baseline)
-    for (int h = 48; h >= 1; h--) {
+    const uint64_t base = MOCK_BASE_MS;   // ~20 Jun 2026 UTC (mock baseline), hour-aligned
+    // h = 47..0, NOT 48..1: the newest sample has to land in the base hour itself.
+    // Seeded one hour short, the window's last step would be a LOCF copy and
+    // lstm_gather_inputs would refuse it as stale (LSTM_MAX_STALE_HOURS = 0), which
+    // is exactly what the boot self-test needs NOT to hit.
+    for (int h = 47; h >= 0; h--) {
         uint64_t ts = base - (uint64_t) h * 3600000ULL;
         float drift = (float) h * 0.002f;       // older = slightly wetter (dry-down)
         savia_reading_t r10 = { .ts_ms = ts, .port = 1, .depth_cm = 10,
@@ -105,6 +109,57 @@ static void clock_persist_if_dirty(void) {
     if (dirty) clock_store_save(blob, n);
 }
 
+// What sync_output_pins remembers between cycles: enough to release a pin that
+// stops being an output, and no more.
+typedef struct { savia_sensor_type_t type; uint8_t gpio; } out_slot_t;
+
+// Drive every output slot to its logical state, and release the ones that stopped
+// being outputs. Until a pin is driven it floats, so a relay board -- not us --
+// would decide the valve's state at boot; and an actuator deleted from the app
+// while ON would otherwise stay energised with nothing left to switch it off.
+// Cheap and self-diffing: call it at boot and once per cycle. `seen` is the
+// previous table and is updated in place; an unchanged slot is left alone so a
+// live output never glitches.
+static void sync_output_pins(out_slot_t *seen, const savia_sensor_slot_t *now) {
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+        uint8_t port = (uint8_t)(i + 1);
+        bool was = seen[i].type == SENSOR_ACTUATOR_DIGITAL;
+        bool is  = now[i].type == SENSOR_ACTUATOR_DIGITAL;
+        bool moved = now[i].gpio != seen[i].gpio;
+        if (was && (!is || moved)) {              // dropped, retyped, or moved pin
+            gpio_init(seen[i].gpio);
+            gpio_set_dir(seen[i].gpio, GPIO_OUT);
+            gpio_put(seen[i].gpio, 0);
+            actuator_set(port, false);
+            LOG_INFO("act: port %u released (GP%u -> OFF)\n", port, seen[i].gpio);
+        }
+        if (is && (!was || moved)) {              // new output: drive it, don't float
+            gpio_init(now[i].gpio);
+            gpio_set_dir(now[i].gpio, GPIO_OUT);
+            gpio_put(now[i].gpio, actuator_is_on(port));
+        }
+        seen[i].type = now[i].type;
+        seen[i].gpio = now[i].gpio;
+    }
+}
+
+// Sample the slots flagged in `mask` and store what they return, stamped `now_ms`.
+// Shared by the scheduled capture and the on-demand inference, which samples first
+// so it never forecasts from a window whose newest step is a copy.
+static void capture_slots(const station_config_t *cfg, uint8_t mask, uint64_t now_ms) {
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+        if (!savia_slot_used(&cfg->sensors[i])) continue;   // free slot
+        if (!(mask & (1u << i))) continue;                  // not due this tick
+        savia_reading_t buf[8];
+        int n = sensor_measure(&cfg->sensors[i], buf, 8);
+        for (int k = 0; k < n; k++) {
+            buf[k].ts_ms = now_ms;
+            buf[k].port = (uint8_t)(i + 1);   // slot index -> logical port
+            storage_append_reading(&buf[k]);
+        }
+    }
+}
+
 // Time source for log line stamps: wall-clock once synced, uptime before that.
 static uint64_t log_clock(bool *wall) {
     uint64_t up = to_ms_since_boot(get_absolute_time());
@@ -129,6 +184,12 @@ int main(void) {
     } else {
         LOG_WARN("config: no valid record -> factory defaults\n");
     }
+    // A record written on a board that carries the model can land on one that
+    // doesn't (same layout): don't advertise LOCAL where nothing can run it.
+    if (cfg.inference_mode == SAVIA_INFER_LOCAL && !inference_on_device()) {
+        cfg.inference_mode = SAVIA_INFER_FORWARD;
+        LOG_WARN("config: LOCAL inference unavailable in this build -> FORWARD\n");
+    }
     savia_log_set_level(cfg.log_level);
 
     // Seed the sync ring from flash: the pre-outage reference. Does NOT set the
@@ -150,6 +211,10 @@ int main(void) {
     }
 
     sensor_init(&cfg);
+    // Outputs are OFF at boot by contract (actuator.h): drive the pins to match
+    // before anything else can connect and ask for a state.
+    out_slot_t out_slots[SAVIA_MAX_SENSORS] = { 0 };
+    sync_output_pins(out_slots, cfg.sensors);
     storage_init();
     bool mock_seeded = false;
     if (cfg.mock_enabled) { seed_mock_readings(); mock_seeded = true; }   // dev dataset
@@ -172,9 +237,9 @@ int main(void) {
     }
     clock_persist_if_dirty();
 
-    printf("savia_c up: on_device_inference=%d, sensors=%u, sleep=%us, capture=%us, daily_h=%u\n",
-           inference_on_device(), cfg.sensor_count, cfg.sleep_seconds,
-           cfg.capture_interval_s, cfg.daily_hour);
+    printf("savia_c up: on_device_inference=%d, sensors=%u, sleep=%us, capture=%us, daily=%02u:%02u\n",
+           inference_on_device(), config_sensor_count(&cfg), cfg.sleep_seconds,
+           cfg.capture_interval_s, cfg.daily_hour, cfg.daily_min);
 
     // On-device inference self-test (dev, mock only): run one LSTM inference over the
     // seeded 48 h mock window right at boot so the logs show whether TFLM allocates,
@@ -214,14 +279,17 @@ int main(void) {
         live = cfg;
         cfg_unlock();
 
+        // A config write may have added, moved or deleted an actuator: no output
+        // is left floating or energised without a slot behind it.
+        sync_output_pins(out_slots, live.sensors);
+
         // 1. Decide what's due now. The sleep time is only the low-power tick;
         //    the schedule forces the mandatory wakes, per sensor (each on its own
         //    cadence). Before time is set we capture every sensor each cycle so we
         //    never sit idle without data (all mask bits set).
         savia_sched_action_t act = timed
             ? scheduler_tick(&sched, now_ms, &live)
-            : (savia_sched_action_t){ .capture_mask = 0xFF, .daily = false,
-                                      .irrigation = false };
+            : (savia_sched_action_t){ .capture_mask = 0xFF, .daily = false };
 
         // Sync mock state if the app toggled it (re-seed the dataset on enable).
         if (live.mock_enabled && !mock_seeded) {
@@ -244,16 +312,7 @@ int main(void) {
                 storage_append_reading(&r30);
                 storage_append_reading(&rta);
             } else {
-                for (uint8_t i = 0; i < live.sensor_count; i++) {
-                    if (!(act.capture_mask & (1u << i))) continue;   // not due this tick
-                    savia_reading_t buf[8];
-                    int n = sensor_measure(&live.sensors[i], buf, 8);
-                    for (int k = 0; k < n; k++) {
-                        buf[k].ts_ms = now_ms;
-                        buf[k].port = (uint8_t)(i + 1);   // slot index -> logical port
-                        storage_append_reading(&buf[k]);
-                    }
-                }
+                capture_slots(&live, act.capture_mask, now_ms);
             }
         }
 
@@ -286,29 +345,13 @@ int main(void) {
         // 2/3. Daily cycle at daily_hour LOCAL: run the LSTM only in LOCAL mode on
         //      an on-device build; in FORWARD the data is served/uplinked instead.
         if (act.daily) {
-            LOG_INFO("sched: daily cycle (local hour=%u, mode=%s)\n",
-                     (unsigned) live.daily_hour,
+            LOG_INFO("sched: daily cycle (local %02u:%02u, mode=%s)\n",
+                     (unsigned) live.daily_hour, (unsigned) live.daily_min,
                      live.inference_mode == SAVIA_INFER_LOCAL ? "local" : "forward");
             if (live.inference_mode == SAVIA_INFER_LOCAL && inference_on_device()) {
                 // Verified on the Pico 2 W (2026-07-04): arena 162 KB, Invoke 269 ms.
                 inference_run_daily(now_ms);
             }
-        }
-
-        // Irrigation hour (informative): store a daily event mark. Served via the
-        // `pred` channel so both apps and the backend can label post-irrigation
-        // readings -- the LSTM inputs are NOT corrected (it was trained on real
-        // orchard data that includes irrigation events).
-        if (act.irrigation) {
-            savia_prediction_t ev;
-            memset(&ev, 0, sizeof ev);
-            ev.ts_ms = now_ms;
-            strcpy(ev.model, "sched");
-            strcpy(ev.kind, "irrigation_event");
-            ev.value = 1.0f;
-            storage_append_prediction(&ev);
-            LOG_INFO("sched: irrigation hour (local %u:00) -> event stored\n",
-                     (unsigned) live.irrigation_hour);
         }
 
         ble_poll(/*budget_ms=*/5000);
@@ -357,6 +400,10 @@ int main(void) {
                 uint64_t up2 = to_ms_since_boot(get_absolute_time());
                 uint64_t inow = clock_is_set() ? clock_now(up2) : up2;
                 LOG_INFO("BLE: running on-demand inference\n");
+                // Sample first: the app can ask at any minute, and the model's
+                // newest step has to be a real reading of THIS hour, not a copy
+                // carried over from the last scheduled capture.
+                if (!live.mock_enabled) capture_slots(&live, 0xFF, inow);
                 inference_run_daily(inow);
             }
         }
@@ -391,11 +438,10 @@ int main(void) {
         // its GPIO. State is RAM-only on purpose -- everything is OFF after boot.
         uint8_t aport; bool aon;
         if (ble_take_act(&aport, &aon)) {
-            if (aport >= 1 && aport <= live.sensor_count &&
+            if (aport >= 1 && aport <= SAVIA_MAX_SENSORS &&
                 live.sensors[aport - 1].type == SENSOR_ACTUATOR_DIGITAL) {
                 uint8_t g = live.sensors[aport - 1].gpio;
-                gpio_init(g);
-                gpio_set_dir(g, GPIO_OUT);
+                gpio_set_dir(g, GPIO_OUT);   // already an output (sync_output_pins)
                 gpio_put(g, aon);
                 actuator_set(aport, aon);
                 LOG_INFO("act: port %u (GP%u) -> %s\n", aport, g, aon ? "ON" : "OFF");

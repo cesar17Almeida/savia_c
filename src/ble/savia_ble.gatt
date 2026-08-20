@@ -19,7 +19,7 @@ CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000011, WRITE | DYNAMIC,
 // weather (0012): {v, op:"upd", data:{...}} -- write.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000012, WRITE | DYNAMIC,
 // config (0013): read = snapshot {v, device, name, sleep_s, deep_sleep, capture_s,
-//   daily_hour, mock, log_level, wake_gpio, sensors}; write = patch (any of those
+//   daily_hour, daily_min, mock, log_level, wake_gpio, sensors}; write = patch (any of those
 //   fields); notify = ack {v, op:"config_ok"/"config_err"}.
 CHARACTERISTIC, 5A71A000-0000-0000-0000-000000000013, READ | WRITE | NOTIFY | DYNAMIC,
 CLIENT_CHARACTERISTIC_CONFIGURATION,

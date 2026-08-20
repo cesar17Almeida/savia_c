@@ -59,10 +59,13 @@
 #define LORA_CFG_LORA_PERIOD_S   0x05   // u32
 #define LORA_CFG_INFERENCE_MODE  0x06   // u8 savia_inference_mode_t
 #define LORA_CFG_UTC_OFFSET_MIN  0x07   // i16
-#define LORA_CFG_IRRIGATION_HOUR 0x08   // u8 0..23 (LOCAL)
+// 0x08 RETIRED (was irrigation_hour, dropped ago-2026). Never reuse the id:
+// renumbering the ones after it would break the backend and the goldens. An
+// old backend still sending it hits the default branch and is ignored.
 #define LORA_CFG_LAT             0x09   // i32 x1e-7
 #define LORA_CFG_LON             0x0A   // i32 x1e-7
 #define LORA_CFG_LOG_LEVEL       0x0B   // u8 0/1
+#define LORA_CFG_DAILY_MIN       0x0C   // u8 0..59 (minute within daily_hour, LOCAL)
 
 // One hourly soil record for the FORWARD uplink. has_* false -> sentinel on wire.
 typedef struct {

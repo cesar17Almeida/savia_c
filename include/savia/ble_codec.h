@@ -53,7 +53,7 @@ typedef struct {
     bool     has_limit; uint64_t limit;
     bool     has_cmd;   char     cmd[SAVIA_AT_CMD_MAX];   // raw command (op:"at"/"sdi12")
     bool     has_gpio;  uint8_t  gpio;                    // probe data pin (op:"sdi12")
-    bool     has_port;  uint8_t  port;                    // actuator slot port (op:"act")
+    bool     has_port;  uint8_t  port;                    // actuator slot (op:"act"); clear scope (op:"clear")
     bool     has_on;    bool     on;                      // actuator target state (op:"act")
 } ble_data_request_t;
 
@@ -96,19 +96,22 @@ typedef struct {
     bool     has_deep_sleep;  bool     deep_sleep;
     bool     has_capture_s;   uint32_t capture_s;
     bool     has_daily_hour;  uint8_t  daily_hour;
+    bool     has_daily_min;   uint8_t  daily_min;
     bool     has_mock;        bool     mock;
     bool     has_log_level;   uint8_t  log_level;
     bool     has_lora_period_s; uint32_t lora_period_s;
     bool     has_inference_mode; uint8_t inference_mode;   // savia_inference_mode_t
     bool     has_utc_offset;  int16_t  utc_offset_min;
-    bool     has_irrigation_hour; uint8_t irrigation_hour;
     // Coords: number sets, null clears. Both must travel together to SET; either
     // null clears the pair (validated in the write path).
     bool     has_lat; bool lat_null; int32_t lat_e7;
     bool     has_lon; bool lon_null; int32_t lon_e7;
     // Full replacement of the sensor table (a sparse patch that omits "sensors"
     // leaves the slots untouched). Validated server-side via pinmap_check_sensors.
-    bool     has_sensors;     uint8_t  sensor_count;
+    // SLOT-ADDRESSED like station_config_t.sensors: index = port - 1, holes are
+    // SENSOR_NONE. has_sensors=false means "table untouched"; true means the whole
+    // table is being replaced, holes included.
+    bool     has_sensors;
     savia_sensor_slot_t sensors[SAVIA_MAX_SENSORS];
 } ble_config_patch_t;
 

@@ -62,6 +62,7 @@ typedef enum {
     SENSOR_DHT11,              // DHT11 combo: air temperature + relative humidity, 1 pin
     SENSOR_HCSR04,             // HC-SR04 ultrasound: gpio=trigger, gpio2=echo -> mm
     SENSOR_ACTUATOR_DIGITAL,   // digital OUTPUT (valve/relay); app-controlled, OFF at boot
+    SAVIA_SENSOR_TYPE_COUNT,   // sentinel: keeps the catalog in sync, never stored
 } savia_sensor_type_t;
 
 // Installer-supplied meaning of one returned value: which reading kind it is and,
@@ -109,8 +110,8 @@ typedef struct {
     // --- Schedule (mandatory wakes, independent of sleep_seconds) ---
     uint32_t capture_interval_s;   // sensor capture cadence, e.g. 3600 (hourly)
     uint8_t  daily_hour;           // LOCAL hour (0..23) for the daily cycle / inference
+    uint8_t  daily_min;            // minute (0..59) within daily_hour; together = time of day
     int16_t  utc_offset_min;       // local = UTC + offset (app sets it from the phone)
-    uint8_t  irrigation_hour;      // LOCAL hour (0..23) irrigation happens; informative only
 
     // --- Operation mode ---
     uint8_t  inference_mode;       // savia_inference_mode_t (default FORWARD)
@@ -127,8 +128,14 @@ typedef struct {
     uint8_t auth_key[SAVIA_AUTH_KEY_LEN];   // SHA256(password); all-zero = unprovisioned
 
     // --- Sensors (configurable pins, multi-sensor) ---
+    // SLOT-ADDRESSED: the logical port is (index + 1) and never moves. A slot with
+    // type == SENSOR_NONE is a free slot, NOT the end of the table -- deleting a
+    // sensor leaves a hole instead of renumbering the ones after it. That matters
+    // because every reading, aggregate and prediction is keyed by port (see
+    // savia_reading_t), on the station AND in the app's database: shifting ports
+    // would silently splice one sensor's history onto another's. Always iterate to
+    // SAVIA_MAX_SENSORS and skip !savia_slot_used().
     savia_sensor_slot_t sensors[SAVIA_MAX_SENSORS];
-    uint8_t sensor_count;
 
     // --- LoRa (Wio-E5 over UART) ---
     bool     lora_enabled;
@@ -143,6 +150,17 @@ typedef struct {
     int16_t  lora_last_snr_ddb;    // deci-dB (x10)
     uint64_t lora_last_signal_ms;  // wall-clock ms of the last signal (0 = never)
 } station_config_t;
+
+// A slot holds a sensor when it carries a type; empty slots stay selectable.
+static inline bool savia_slot_used(const savia_sensor_slot_t *s) {
+    return s->type != SENSOR_NONE;
+}
+
+// Occupied slots (for logs and messages only -- never as a loop bound).
+uint8_t config_sensor_count(const station_config_t *cfg);
+
+// Lowest free slot, or -1 when the table is full. New sensors land here.
+int config_first_free_slot(const station_config_t *cfg);
 
 // Fill cfg with safe development defaults.
 void config_load_defaults(station_config_t *cfg);

@@ -1,4 +1,5 @@
 #include "savia/scheduler.h"
+#include "savia/sensor_catalog.h"
 
 #define MS_PER_S    1000ULL
 #define MS_PER_MIN  60000LL
@@ -8,7 +9,6 @@
 void scheduler_init(savia_scheduler_t *s) {
     for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) s->next_sensor_ms[i] = 0;  // all due on first tick
     s->last_daily_day = -1;
-    s->last_irrigation_day = -1;
 }
 
 // Wall (UTC) epoch ms -> local epoch ms. Offset is minutes, may be negative; the
@@ -26,32 +26,53 @@ static uint64_t sensor_interval_ms(const savia_sensor_slot_t *sensors, uint8_t i
     return ms == 0 ? MS_PER_HOUR : ms;
 }
 
-// ms from now until the next LOCAL time-of-day `hour` boundary that still needs
-// firing (today if not yet fired and not yet passed, else tomorrow). The delta is
+// The daily target as ms since LOCAL midnight.
+static uint64_t daily_ms_of_day(const station_config_t *cfg) {
+    uint32_t minutes = (uint32_t) cfg->daily_hour * 60u + (uint32_t) cfg->daily_min;
+    return (uint64_t) minutes * (uint64_t) MS_PER_MIN;
+}
+
+// ms from now until the next LOCAL time-of-day boundary that still needs firing
+// (today if not yet fired and not yet passed, else tomorrow). The delta is
 // identical in UTC and local domains (the offset is constant).
-static uint64_t ms_until_hour(uint64_t local_ms, uint8_t hour, int32_t last_day) {
+static uint64_t ms_until_time(uint64_t local_ms, uint64_t fire_of_day, int32_t last_day) {
     int32_t today = (int32_t)(local_ms / MS_PER_DAY);
-    uint64_t today_fire = (uint64_t) today * MS_PER_DAY + (uint64_t) hour * MS_PER_HOUR;
+    uint64_t today_fire = (uint64_t) today * MS_PER_DAY + fire_of_day;
     if (local_ms < today_fire && last_day != today) return today_fire - local_ms;
     return (today_fire + MS_PER_DAY) - local_ms;   // already fired/passed today -> tomorrow
 }
 
-// True (and marks the day) when LOCAL time-of-day `hour` is due and hasn't fired
-// on this local day yet.
-static bool fire_at_hour(uint64_t local_ms, uint8_t hour, int32_t *last_day) {
+// True (and marks the day) when the LOCAL time of day has REACHED the daily target
+// and it hasn't fired on this local day yet.
+//
+// The test is a threshold, not an equality on the hour, and that is deliberate: at
+// minute resolution the target is a single minute, so an equality would be missed
+// by any station that wasn't looking at that exact moment -- powered off, a deep
+// sleep that overshot, or the clock jumping forward on the first LoRa sync of the
+// power cycle (before that the caller doesn't tick us at all, see main.c). With
+// ">=" such a station runs the cycle when it comes back instead of silently losing
+// the day. The catch-up consumes the day's slot: it won't fire again until
+// tomorrow. The forecast is anchored to the moment it runs, so a late run is a
+// valid forecast, just issued late; and if the history isn't usable
+// lstm_gather_inputs refuses it and says why.
+static bool fire_at_time(uint64_t local_ms, uint64_t fire_of_day, int32_t *last_day) {
     int32_t today = (int32_t)(local_ms / MS_PER_DAY);
-    uint32_t h = (uint32_t)((local_ms / MS_PER_HOUR) % 24);
-    if (h == hour && *last_day != today) { *last_day = today; return true; }
+    uint64_t ms_of_day = local_ms % MS_PER_DAY;
+    if (ms_of_day >= fire_of_day && *last_day != today) { *last_day = today; return true; }
     return false;
 }
 
 savia_sched_action_t scheduler_tick(savia_scheduler_t *s, uint64_t now_ms,
                                     const station_config_t *cfg) {
-    savia_sched_action_t act = { 0, false, false };
-    uint8_t count = cfg->sensor_count;
-    if (count > SAVIA_MAX_SENSORS) count = SAVIA_MAX_SENSORS;
-
-    for (uint8_t i = 0; i < count; i++) {
+    savia_sched_action_t act = { 0, false };
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+        // A free slot has no deadline. Clearing it matters because slots are stable:
+        // the sensor that later lands here would otherwise inherit the deleted one's
+        // due time and stay silent for up to a full interval after being added.
+        // An output slot is cleared for the same reason: it has nothing to measure,
+        // so it must not hand a stale deadline to the sensor that replaces it.
+        if (!savia_slot_used(&cfg->sensors[i]) ||
+            sensor_type_is_output(cfg->sensors[i].type)) { s->next_sensor_ms[i] = 0; continue; }
         uint64_t interval = sensor_interval_ms(cfg->sensors, i, cfg->capture_interval_s);
         if (s->next_sensor_ms[i] == 0 || now_ms >= s->next_sensor_ms[i]) {
             act.capture_mask |= (uint8_t)(1u << i);
@@ -62,20 +83,34 @@ savia_sched_action_t scheduler_tick(savia_scheduler_t *s, uint64_t now_ms,
     }
 
     uint64_t local = to_local_ms(now_ms, cfg->utc_offset_min);
-    act.daily      = fire_at_hour(local, cfg->daily_hour, &s->last_daily_day);
-    act.irrigation = fire_at_hour(local, cfg->irrigation_hour, &s->last_irrigation_day);
+    act.daily = fire_at_time(local, daily_ms_of_day(cfg), &s->last_daily_day);
+
+    // Sample before inferring. The daily cycle forecasts from the last 48 h and the
+    // newest step must be a real reading, not a copy (LSTM_MAX_STALE_HOURS = 0).
+    // Left to their own cadence the sensors would almost never fall on the daily
+    // boundary -- their due times are anchored to boot, the daily wake to the clock
+    // -- so the newest bucket would belong to the previous hour and inference would
+    // never run. Marking them due here costs one extra sample a day. Their own due
+    // times are untouched: this is an extra reading, not a replacement.
+    if (act.daily) {
+        for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+            if (!savia_slot_used(&cfg->sensors[i]) ||
+                sensor_type_is_output(cfg->sensors[i].type)) continue;
+            act.capture_mask |= (uint8_t)(1u << i);
+        }
+    }
     return act;
 }
 
 uint32_t scheduler_next_sleep_s(const savia_scheduler_t *s, uint64_t now_ms,
                                 const station_config_t *cfg) {
-    uint8_t count = cfg->sensor_count;
-    if (count > SAVIA_MAX_SENSORS) count = SAVIA_MAX_SENSORS;
-
-    // Soonest sensor due. With no sensors configured this stays "very far" and the
-    // daily/irrigation wakes (always finite) bound the nap.
+    // Soonest sensor due. Output slots are skipped: waking to drive nothing is pure
+    // battery. With no INPUT configured this stays "very far" and the daily wake
+    // (always finite) bounds the nap.
     uint64_t next = (uint64_t) -1;
-    for (uint8_t i = 0; i < count; i++) {
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+        if (!savia_slot_used(&cfg->sensors[i]) ||
+            sensor_type_is_output(cfg->sensors[i].type)) continue;
         uint64_t interval = sensor_interval_ms(cfg->sensors, i, cfg->capture_interval_s);
         uint64_t until = (s->next_sensor_ms[i] > now_ms)
             ? (s->next_sensor_ms[i] - now_ms) : interval;
@@ -83,10 +118,8 @@ uint32_t scheduler_next_sleep_s(const savia_scheduler_t *s, uint64_t now_ms,
     }
 
     uint64_t local = to_local_ms(now_ms, cfg->utc_offset_min);
-    uint64_t until_daily = ms_until_hour(local, cfg->daily_hour, s->last_daily_day);
+    uint64_t until_daily = ms_until_time(local, daily_ms_of_day(cfg), s->last_daily_day);
     if (until_daily < next) next = until_daily;
-    uint64_t until_irr = ms_until_hour(local, cfg->irrigation_hour, s->last_irrigation_day);
-    if (until_irr < next) next = until_irr;
 
     uint64_t cap = (uint64_t) cfg->sleep_seconds * MS_PER_S;
     if (cap > 0 && cap < next) next = cap;

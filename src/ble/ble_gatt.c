@@ -211,10 +211,20 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
         else if (strcmp(dr.kind, SAVIA_KIND_AGG) == 0)  c = storage_aggregate_hourly(from, to, 0, q_agg, sizeof(q_agg) / sizeof(q_agg[0]));
         else if (strcmp(dr.kind, SAVIA_KIND_LOGS) == 0) c = savia_log_count();
         g_resp_len = ble_serialize_count(c, g_resp, sizeof(g_resp));
-    } else if (strcmp(dr.op, SAVIA_OP_CLEAR) == 0) {   // dev: wipe stored data
-        storage_clear();
-        LOG_INFO("BLE: cleared all data\n");
-        g_resp_len = ble_serialize_count(0, g_resp, sizeof(g_resp));
+    } else if (strcmp(dr.op, SAVIA_OP_CLEAR) == 0) {
+        if (dr.has_port) {
+            // Scoped clear: the installer deleted the sensor on that port and chose
+            // not to keep its data. The port is about to be free for a different
+            // sensor, and readings are keyed by port -- leaving them would splice
+            // the old sensor's last hours onto the new one. Answers with the count.
+            size_t gone = storage_clear_port(dr.port);
+            LOG_INFO("BLE: cleared %u readings of port %u\n", (unsigned) gone, dr.port);
+            g_resp_len = ble_serialize_count((uint64_t) gone, g_resp, sizeof(g_resp));
+        } else {                                       // dev: wipe stored data
+            storage_clear();
+            LOG_INFO("BLE: cleared all data\n");
+            g_resp_len = ble_serialize_count(0, g_resp, sizeof(g_resp));
+        }
     } else if (strcmp(dr.op, SAVIA_OP_MOCK) == 0) {    // dev: inject mock data
         if (strcmp(dr.kind, SAVIA_KIND_PRED) == 0) {   // synthetic 24 h LSTM forecast
             mock_predictions();
@@ -269,7 +279,7 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
         // exactly like a real switch.
         bool valid = dr.has_port && dr.has_on && g_cfg &&
                      dr.port >= 1 && dr.port <= SAVIA_MAX_SENSORS &&
-                     dr.port <= g_cfg->sensor_count &&
+                     dr.port <= SAVIA_MAX_SENSORS &&
                      g_cfg->sensors[dr.port - 1].type == SENSOR_ACTUATOR_DIGITAL;
         if (valid) {
             g_act_port = dr.port;
@@ -301,6 +311,8 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
         } else if (strcmp(dr.kind, SAVIA_KIND_PRED) == 0) {
             size_t n = storage_query_pred(from, to, lim, q_pred, sizeof(q_pred) / sizeof(q_pred[0]));
             g_resp_len = ble_serialize_predictions(q_pred, n, g_resp, sizeof(g_resp));
+        } else if (strcmp(dr.kind, SAVIA_KIND_PINMAP) == 0) {
+            g_resp_len = ble_serialize_pinmap(g_cfg, g_resp, sizeof(g_resp));
         } else if (strcmp(dr.kind, SAVIA_KIND_LOGS) == 0) {
             unsigned ln = savia_log_count();
             const char *lines[64];
@@ -366,6 +378,11 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
                 ok = false; err = "daily_hour out of range";
             } else next.daily_hour = cp.daily_hour;
         }
+        if (ok && cp.has_daily_min) {
+            if (cp.daily_min > 59) {
+                ok = false; err = "daily_min out of range";
+            } else next.daily_min = cp.daily_min;
+        }
         if (ok && cp.has_name) {
             if (cp.name[0] == 0) {
                 ok = false; err = "name empty";
@@ -397,11 +414,6 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
                 ok = false; err = "utc_offset out of range";
             } else next.utc_offset_min = cp.utc_offset_min;
         }
-        if (ok && cp.has_irrigation_hour) {
-            if (cp.irrigation_hour > 23) {
-                ok = false; err = "irrigation_hour out of range";
-            } else next.irrigation_hour = cp.irrigation_hour;
-        }
         if (ok && (cp.has_lat || cp.has_lon)) {
             if (cp.lat_null || cp.lon_null) {
                 next.has_coords = false;                  // null clears the pair
@@ -419,7 +431,8 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
         if (ok && cp.has_sensors) {
             // A per-sensor cadence (0 = follow capture_s) must sit in the same range
             // as the global capture interval; reject the whole table otherwise.
-            for (uint8_t i = 0; ok && i < cp.sensor_count; i++) {
+            for (uint8_t i = 0; ok && i < SAVIA_MAX_SENSORS; i++) {
+                if (!savia_slot_used(&cp.sensors[i])) continue;
                 uint32_t iv = cp.sensors[i].sample_interval_s;
                 if (iv != 0 && (iv < SAVIA_CAPTURE_MIN_S || iv > SAVIA_SLEEP_MAX_S)) {
                     static char ierr[40];
@@ -432,16 +445,15 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
             // Validate the whole proposed table atomically against the pin inventory
             // (caps + reservations + intra-batch collisions) before committing any of it.
             int bad = -1;
-            savia_pin_assign_t r = pinmap_check_sensors(&next, cp.sensors, cp.sensor_count, &bad);
+            savia_pin_assign_t r = pinmap_check_sensors(&next, cp.sensors, &bad);
             if (r != SAVIA_PIN_ASSIGN_OK) {
                 static char serr[40];
                 snprintf(serr, sizeof serr, "sensor %d: %s", bad, pinmap_assign_str(r));
                 ok = false; err = serr;
             } else {
-                for (uint8_t i = 0; i < cp.sensor_count; i++) next.sensors[i] = cp.sensors[i];
-                for (uint8_t i = cp.sensor_count; i < SAVIA_MAX_SENSORS; i++)
-                    next.sensors[i].type = SENSOR_NONE;
-                next.sensor_count = cp.sensor_count;
+                // Slot-addressed swap: the patch already carries the whole table
+                // with its holes, so ports keep their meaning across the write.
+                for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) next.sensors[i] = cp.sensors[i];
             }
         }
 
@@ -543,6 +555,9 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
     }
     if (att_handle == H_PINMAP) {
+        // NOTE: at ~1.1 KB this payload exceeds the 512 B maximum ATT attribute
+        // value, so phones stop reading here and get a truncated CBOR. Kept for
+        // compatibility; the app pulls the inventory chunked (kind "pinmap").
         static uint8_t tmp[2048];   // GPIO inventory: 30 pins, ~1.1 KB measured
         size_t n = ble_serialize_pinmap(g_cfg, tmp, sizeof(tmp));
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);

@@ -21,12 +21,17 @@ void config_load_defaults(station_config_t *cfg) {
     // utc_offset_min 0 until the app/backend sets it (local == UTC out of the box).
     cfg->capture_interval_s = 3600;
     cfg->daily_hour = 20;
+    cfg->daily_min = 0;
     cfg->utc_offset_min = 0;
-    cfg->irrigation_hour = 6;
 
-    // Mode: FORWARD (data store) -- safe on any board; the app can switch to LOCAL
-    // on builds where inference_on_device() is true.
+    // Mode: infer HERE whenever the build carries the model (Pico 2 W); a board
+    // without it can only be a data store, and the BLE write-path would reject
+    // LOCAL anyway. Host builds don't define the macro -> FORWARD.
+#if SAVIA_ON_DEVICE_INFERENCE
+    cfg->inference_mode = SAVIA_INFER_LOCAL;
+#else
     cfg->inference_mode = SAVIA_INFER_FORWARD;
+#endif
     cfg->has_coords = false;       // installer sets coords from the app
 
     // Mock data OFF by default -- the station reads the real sensor out of the box.
@@ -34,15 +39,15 @@ void config_load_defaults(station_config_t *cfg) {
     cfg->mock_enabled = false;
     cfg->log_level = 1;            // SAVIA_LOG_INFO
 
-    // AquaCheck SDI-12 probe, addr '0'. Default pin GP2; the real pin is set from
-    // the app (bring-up wired it to GP18). Real probe = SKU 1120-0404: 4 sensors at
-    // 10/20/30/40 cm, order top->bottom (HS10=value[0], HS30=value[2]).
-    // Verified by bring-up; see tools/sdi12_bringup/AQUACHECK_RESPONSES.md.
-    cfg->sensors[0].type = SENSOR_SDI12_AQUACHECK;
-    cfg->sensors[0].gpio = 2;
-    cfg->sensors[0].address = '0';
-    cfg->sensor_count = 1;
-    // gpio2 is "unused" (0xFF) on every slot; memset(0) above would leave 0 = GP0.
+    // No sensors out of the box: the installer declares the whole table from the
+    // app, so a fresh station is configured from scratch instead of inheriting a
+    // probe it may not have. An empty table is a supported state -- the scheduler
+    // just falls back to the daily wake (see scheduler_next_sleep_s).
+    // The AquaCheck (SKU 1120-0404: 4 sensors at 10/20/30/40 cm, top->bottom,
+    // HS10=value[0], HS30=value[2], addr '0') is added from TerraLink like any
+    // other; see tools/sdi12_bringup/AQUACHECK_RESPONSES.md.
+    // Every slot free (memset gave type = SENSOR_NONE); gpio2 is "unused" (0xFF),
+    // which memset(0) would have left as 0 = GP0.
     for (int i = 0; i < SAVIA_MAX_SENSORS; i++) cfg->sensors[i].gpio2 = SAVIA_GPIO_NONE;
 
     // LoRa ON by default: the boot uplink is the station's primary time source
@@ -53,4 +58,15 @@ void config_load_defaults(station_config_t *cfg) {
     cfg->lora_uart_tx_gpio = 16;
     cfg->lora_uart_rx_gpio = 17;
     cfg->lora_period_s = 3600;   // 1 h; a private gateway + paid plan lift the TTN FUP
+}
+
+uint8_t config_sensor_count(const station_config_t *cfg) {
+    uint8_t n = 0;
+    for (int i = 0; i < SAVIA_MAX_SENSORS; i++) if (savia_slot_used(&cfg->sensors[i])) n++;
+    return n;
+}
+
+int config_first_free_slot(const station_config_t *cfg) {
+    for (int i = 0; i < SAVIA_MAX_SENSORS; i++) if (!savia_slot_used(&cfg->sensors[i])) return i;
+    return -1;
 }
