@@ -11,10 +11,16 @@
 // Fill `series[48]` (oldest -> newest, index 47 == latest_hour) from the hourly
 // aggregates matching (kind, depth). Missing interior/trailing buckets are carried
 // forward (LOCF); a leading gap is back-filled from the first known sample.
-// Returns false if NOTHING matched at all.
-static bool fill_series(const savia_aggregate_t *aggs, size_t n,
-                        uint64_t latest_hour, uint8_t kind, uint8_t depth_cm,
-                        float *series) {
+// Returns how many of the 48 slots came from a REAL bucket (0 = nothing matched),
+// so the caller can refuse a window that is mostly invention. Distinct ports can
+// map to the same hour, hence the count is taken from `present[]` and not bumped
+// inside the scan. `newest_age` reports how many hours back the newest real bucket
+// sits (0 = the current hour): the count says HOW MUCH is real, this says how
+// RECENT, and a dead probe only shows up in the second.
+static int fill_series(const savia_aggregate_t *aggs, size_t n,
+                       uint64_t latest_hour, uint8_t kind, uint8_t depth_cm,
+                       float *series, int *newest_age) {
+    *newest_age = LSTM_PAST_STEPS;                                  // nothing real yet
     bool present[LSTM_PAST_STEPS] = { false };
     for (size_t i = 0; i < n; i++) {
         if (aggs[i].kind != kind || aggs[i].depth_cm != depth_cm) continue;
@@ -25,13 +31,19 @@ static bool fill_series(const savia_aggregate_t *aggs, size_t n,
         series[idx] = aggs[i].mean;
         present[idx] = true;
     }
-    int first = -1;
-    for (size_t i = 0; i < LSTM_PAST_STEPS; i++) if (present[i]) { first = (int) i; break; }
-    if (first < 0) return false;                                    // no data at all
+    int first = -1, last = -1, real = 0;
+    for (size_t i = 0; i < LSTM_PAST_STEPS; i++) {
+        if (!present[i]) continue;
+        if (first < 0) first = (int) i;
+        last = (int) i;
+        real++;
+    }
+    if (first < 0) return 0;                                        // no data at all
+    *newest_age = (LSTM_PAST_STEPS - 1) - last;
     for (int i = 0; i < first; i++) series[i] = series[first];      // leading gap
     for (size_t i = (size_t) first + 1; i < LSTM_PAST_STEPS; i++)   // interior/trailing
         if (!present[i]) series[i] = series[i - 1];
-    return true;
+    return real;
 }
 
 lstm_input_status_t lstm_gather_inputs(uint64_t now_ms, lstm_raw_inputs_t *out) {
@@ -43,11 +55,18 @@ lstm_input_status_t lstm_gather_inputs(uint64_t now_ms, lstm_raw_inputs_t *out) 
     static savia_aggregate_t aggs[208];
     size_t n = storage_aggregate_hourly(from, to, 0, aggs, sizeof(aggs) / sizeof(aggs[0]));
 
-    // HS10 / HS30 from the soil probe.
-    if (!fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 10, out->hs10))
+    // HS10 / HS30 from the soil probe. Two independent guards, because they catch
+    // different failures: the coverage floor catches a station too young to have a
+    // history (one hour of readings back-filled across two days is not one), the
+    // staleness bound catches a veteran station whose probe died hours ago -- that
+    // one clears the floor easily and would forecast from soil that no longer exists.
+    int age10, age30;
+    int real10 = fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 10, out->hs10, &age10);
+    int real30 = fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 30, out->hs30, &age30);
+    if (real10 < LSTM_MIN_PAST_HOURS || real30 < LSTM_MIN_PAST_HOURS)
         return LSTM_INPUT_INSUFFICIENT_HISTORY;
-    if (!fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 30, out->hs30))
-        return LSTM_INPUT_INSUFFICIENT_HISTORY;
+    if (age10 > LSTM_MAX_STALE_HOURS || age30 > LSTM_MAX_STALE_HOURS)
+        return LSTM_INPUT_STALE_HISTORY;
 
     // TA (past + future) from the weather cache. WEATHER_PAST_MAX / FUTURE_MAX are
     // exactly the LSTM window, so we require a full cache and align the newest past
@@ -60,6 +79,16 @@ lstm_input_status_t lstm_gather_inputs(uint64_t now_ms, lstm_raw_inputs_t *out) 
     memcpy(out->ta, past_ta + (n_past - LSTM_PAST_STEPS), LSTM_PAST_STEPS * sizeof(float));
     memcpy(out->future_ta, fut_ta, LSTM_FUTURE_STEPS * sizeof(float));
     return LSTM_INPUT_OK;
+}
+
+const char *lstm_input_status_str(lstm_input_status_t st) {
+    switch (st) {
+        case LSTM_INPUT_OK:                   return "ok";
+        case LSTM_INPUT_INSUFFICIENT_HISTORY: return "not enough real soil history yet";
+        case LSTM_INPUT_NO_FORECAST:          return "no air-temperature forecast cached";
+        case LSTM_INPUT_STALE_HISTORY:        return "soil probe has no recent reading";
+    }
+    return "unknown";
 }
 
 void lstm_build_tensors(const lstm_raw_inputs_t *in, float *past_out, float *future_out) {

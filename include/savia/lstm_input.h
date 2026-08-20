@@ -15,6 +15,34 @@
 #include <stdint.h>
 
 #define LSTM_PAST_STEPS     48
+
+// Real hourly buckets a soil series needs INSIDE the 48 h window before the gaps
+// around them are worth filling. The LOCF/back-fill below is meant to bridge a
+// missed hour, not to manufacture two days of history out of one sample: under
+// this floor the window would be mostly fabricated, so gathering fails instead.
+#define LSTM_MIN_PAST_HOURS 24
+
+// How old the newest REAL bucket of a soil series may be before the window stops
+// being trustworthy, in hours. 0 = the hour being inferred must contain a real
+// reading; nothing in the newest step may be a LOCF copy.
+//
+// Zero is deliberate. The copy-forward fill cannot represent a discrete event: if
+// it rained or the field was irrigated inside the copied span, the window still
+// says the soil is where it was, and the forecast starts from soil that no longer
+// exists. At one hour of tolerance that is already a plausible miss, so we take
+// none. What makes zero workable is that the supervisor SAMPLES BEFORE IT INFERS
+// (see scheduler_tick: a daily tick marks every input slot due, and the on-demand
+// path captures first) -- without that, the newest bucket would usually belong to
+// the previous hour and inference would never run.
+//
+// To grant tolerance later: raise this to N and the newest real bucket may be up
+// to N hours old, the missing steps being copies of it. Weigh it as "how long a
+// blind spot am I willing to forecast across" -- an irrigation cycle or a shower
+// fits in one hour. Nothing else needs to change; the guard is one comparison in
+// lstm_gather_inputs. Note that a capture_interval_s above N hours puts every
+// window past the bound and stops LOCAL inference, which is intended: the model
+// was trained on hourly series.
+#define LSTM_MAX_STALE_HOURS 0
 #define LSTM_PAST_FEATURES  3
 #define LSTM_FUTURE_STEPS   24
 #define LSTM_OUTPUT_STEPS   24
@@ -34,7 +62,12 @@ typedef enum {
     LSTM_INPUT_OK                   = 0,
     LSTM_INPUT_INSUFFICIENT_HISTORY = -1,  // no HS10/HS30 history to build the window
     LSTM_INPUT_NO_FORECAST          = -2,  // TA past/future window not available
+    LSTM_INPUT_STALE_HISTORY        = -3,  // soil history is there but stops too far back
 } lstm_input_status_t;
+
+// Human-readable reason, for the logs the app reads over BLE ("status=-3" tells
+// an installer nothing). Never NULL.
+const char *lstm_input_status_str(lstm_input_status_t st);
 
 // Assemble the raw window ending at the hour containing `now_ms`. Interior gaps
 // in a soil series are filled last-observation-carried-forward; a leading gap is

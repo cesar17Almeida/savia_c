@@ -24,7 +24,7 @@ int inference_run_daily(uint64_t now_ms) {
     lstm_raw_inputs_t raw;
     lstm_input_status_t st = lstm_gather_inputs(now_ms, &raw);
     if (st != LSTM_INPUT_OK) {
-        LOG_WARN("inference: inputs not ready (status=%d) -- skipping\n", (int) st);
+        LOG_WARN("inference: skipped -- %s (status=%d)\n", lstm_input_status_str(st), (int) st);
         return (int) st;
     }
 
@@ -44,7 +44,7 @@ int inference_run_daily(uint64_t now_ms) {
     lstm_unscale_output(out_scaled, hs30);
 
     // Persist the 24 h forecast (one row per hour, next 24 h) + log the min, which
-    // is what the LoRa uplink / downstream irrigation logic cares about.
+    // is what the LoRa uplink / the downstream watering decision cares about.
     uint64_t latest_hour = now_ms - (now_ms % HOUR_MS);
     float min = hs30[0];
     storage_clear_predictions();                       // fresh curve replaces yesterday's

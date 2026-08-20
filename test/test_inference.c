@@ -24,6 +24,21 @@
 
 static int close_to(float a, double b) { return fabs((double) a - b) < 1e-4; }
 
+// Seed `hours` hourly HS10/HS30 samples whose NEWEST lands in the hour `latest`
+// (one reading per hour, mid-hour so it sits squarely inside its bucket). Pass a
+// `latest` in the past to simulate a probe that stopped reporting back then.
+static void seed_soil_hours(uint64_t latest, int hours) {
+    for (int age = hours - 1; age >= 0; age--) {
+        uint64_t ts = latest - (uint64_t) age * HOUR_MS + 60000ULL;
+        savia_reading_t r10 = { .ts_ms = ts, .port = 1, .depth_cm = 10,
+                                .kind = READING_SOIL_MOISTURE, .value = 0.70f };
+        savia_reading_t r30 = { .ts_ms = ts, .port = 1, .depth_cm = 30,
+                                .kind = READING_SOIL_MOISTURE, .value = 0.74f };
+        storage_append_reading(&r10);
+        storage_append_reading(&r30);
+    }
+}
+
 int main(void) {
     // --- scaler forward + inverse ---
     assert(close_to(scaler_transform(0.80f, SCALER_HS30), (0.80 - MU_HS30) / SD_HS30));
@@ -83,18 +98,83 @@ int main(void) {
 
     // --- missing forecast -> NO_FORECAST; missing soil -> INSUFFICIENT_HISTORY ---
     storage_init();
+    seed_soil_hours(latest, LSTM_PAST_STEPS);         // soil fine, so the forecast decides
     weather_set(pta, 10, fta, 5, now);                // too few samples
-    savia_reading_t one = { .ts_ms = latest, .port = 1, .depth_cm = 10,
-                            .kind = READING_SOIL_MOISTURE, .value = 0.7f };
-    savia_reading_t one30 = one; one30.depth_cm = 30;
-    storage_append_reading(&one);
-    storage_append_reading(&one30);
     assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_NO_FORECAST);
 
     storage_init();
     weather_set(pta, WEATHER_PAST_MAX, fta, WEATHER_FUTURE_MAX, now);   // forecast fine
     assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_INSUFFICIENT_HISTORY);  // no soil
     printf("test_inference: missing-input guards OK\n");
+
+    // --- real-coverage floor: the window must not be manufactured by LOCF ---
+    // One hour of readings used to back-fill all 48 slots and report OK, so a
+    // station an hour old "had" two days of history. Sub-floor coverage now fails.
+    storage_init();
+    weather_set(pta, WEATHER_PAST_MAX, fta, WEATHER_FUTURE_MAX, now);
+    seed_soil_hours(latest, 1);                       // a single hour
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_INSUFFICIENT_HISTORY);
+
+    storage_init();
+    seed_soil_hours(latest, LSTM_MIN_PAST_HOURS - 1); // one short of the floor
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_INSUFFICIENT_HISTORY);
+
+    storage_init();
+    seed_soil_hours(latest, LSTM_MIN_PAST_HOURS);     // exactly the floor -> accepted
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_OK);
+    assert(close_to(raw.hs30[0], 0.74f));             // leading gap back-filled
+
+    // Readings packed inside ONE hour are ONE bucket, however many there are: 60
+    // samples a minute apart must not look like 60 hours of history.
+    storage_init();
+    for (int m = 0; m < 60; m++) {
+        savia_reading_t r10 = { .ts_ms = latest + (uint64_t) m * 60000ULL, .port = 1,
+                                .depth_cm = 10, .kind = READING_SOIL_MOISTURE, .value = 0.70f };
+        savia_reading_t r30 = r10; r30.depth_cm = 30; r30.value = 0.74f;
+        storage_append_reading(&r10);
+        storage_append_reading(&r30);
+    }
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_INSUFFICIENT_HISTORY);
+    printf("test_inference: real-coverage floor OK\n");
+
+    // --- staleness bound: plenty of history, but it stops hours ago ---
+    // The probe reported for 43 h and then went quiet 5 h before the inference.
+    // Coverage is 43/48, way over the floor -- only the staleness check sees it.
+    storage_init();
+    weather_set(pta, WEATHER_PAST_MAX, fta, WEATHER_FUTURE_MAX, now);
+    seed_soil_hours(latest - 5 * HOUR_MS, 43);
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_STALE_HISTORY);
+
+    // Exactly at the bound still passes (with tolerance 0: the current hour is
+    // real). This is what "sample before you infer" guarantees -- see scheduler.c.
+    storage_init();
+    seed_soil_hours(latest - LSTM_MAX_STALE_HOURS * HOUR_MS, 30);
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_OK);
+
+    // One hour past the bound already fails: the newest step would be a copy.
+    storage_init();
+    seed_soil_hours(latest - (LSTM_MAX_STALE_HOURS + 1) * HOUR_MS, 30);
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_STALE_HISTORY);
+
+    // Only one of the two depths going quiet is enough to refuse: the model reads
+    // both, so a half-dead probe is not a usable window either.
+    storage_init();
+    seed_soil_hours(latest, 30);                              // HS10 + HS30 fresh
+    for (int age = 29; age >= 0; age--) {                     // extra HS10 only
+        savia_reading_t r10 = { .ts_ms = latest - (uint64_t) age * HOUR_MS + 60000ULL,
+                                .port = 1, .depth_cm = 10,
+                                .kind = READING_SOIL_MOISTURE, .value = 0.70f };
+        storage_append_reading(&r10);
+    }
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_OK);   // both still fresh
+
+    // A gap in the MIDDLE is what LOCF is for and must still pass, however wide,
+    // as long as the newest bucket is fresh and coverage clears the floor.
+    storage_init();
+    seed_soil_hours(latest - 20 * HOUR_MS, 28);   // oldest block, ends 20 h back
+    seed_soil_hours(latest, 20);                  // fresh block, up to now
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_OK);
+    printf("test_inference: staleness bound OK\n");
 
     // --- build tensors: scaling + model column order [TA, HS10, HS30] ---
     memset(&raw, 0, sizeof(raw));
