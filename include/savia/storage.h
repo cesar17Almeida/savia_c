@@ -27,6 +27,12 @@ bool   storage_append_reading(const savia_reading_t *r);
 // have produced. Returns how many readings were rebased.
 size_t storage_rebase_provisional(uint64_t delta_ms);
 
+// Drop every reading of one logical port, keeping the rest in FIFO order. Called
+// when the installer deletes a sensor and chooses not to keep its data: the port
+// is about to be free for a different sensor, and readings are keyed by port.
+// Returns how many were removed.
+size_t storage_clear_port(uint8_t port);
+
 // Upsert by identity (ts_ms, port, kind, depth_cm): if a matching reading exists
 // its value is overwritten and *created=false; otherwise the reading is appended
 // and *created=true. Lets the app push/correct points by timestamp ("ingest").

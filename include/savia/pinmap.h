@@ -78,11 +78,12 @@ savia_pin_assign_t pinmap_check_assign(const station_config_t *cfg, uint8_t gpio
                                        uint8_t need, int exclude_slot);
 
 // Validate a whole proposed sensors[] set atomically against `base`'s system
-// reservations AND against itself (so two new slots can't share a pin). Returns
-// the first non-OK result and writes its slot index to *bad_index (-1 if OK).
-// Pure: applies nothing. The config write-path calls this before committing.
+// reservations AND against itself (so two new slots can't share a pin). `slots` is
+// the full SLOT-ADDRESSED table (SAVIA_MAX_SENSORS entries, holes = SENSOR_NONE).
+// Returns the first non-OK result and writes its slot index to *bad_index (-1 if
+// OK). Pure: applies nothing. The config write-path calls this before committing.
 savia_pin_assign_t pinmap_check_sensors(const station_config_t *base,
-                                        const savia_sensor_slot_t *slots, uint8_t n,
+                                        const savia_sensor_slot_t *slots,
                                         int *bad_index);
 
 // Short token for an assign result (for the config_err ack message).

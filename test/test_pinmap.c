@@ -3,12 +3,19 @@
 // from a config, and the assignment validator the config write-path will use.
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include "savia/config.h"
 #include "savia/pinmap.h"
+#include "savia/sensor_catalog.h"
 
 int main(void) {
     station_config_t cfg;
-    config_load_defaults(&cfg);   // 1 sensor on GP2, wake on GP15, LoRa OFF (GP4/5)
+    config_load_defaults(&cfg);   // no sensors, wake on GP15, LoRa OFF (GP4/5)
+    // Defaults ship an empty sensor table, so place the probe the rest of this
+    // test reasons about (slot 0 -> port 1) instead of inheriting it.
+    cfg.sensors[0].type = SENSOR_SDI12_AQUACHECK;
+    cfg.sensors[0].gpio = 2;
+    cfg.sensors[0].address = '0';
 
     // --- static capabilities ---
     assert(pinmap_caps(2)  & SAVIA_PIN_CAP_PIO);     // SDI-12 needs PIO; GP2 has it
@@ -62,49 +69,48 @@ int main(void) {
     // --- atomic multi-sensor validation (the sensors[] write-path gate) ---
     cfg.lora_enabled = false;   // back to GP16/17 free for these cases
     {
-        savia_sensor_slot_t set[2] = {0};
+        savia_sensor_slot_t set[SAVIA_MAX_SENSORS] = {0};
         set[0].type = SENSOR_SDI12_GENERIC; set[0].gpio = 6;     // PIO ok
         set[1].type = SENSOR_ANALOG_LINEAR; set[1].gpio = 26;    // ADC ok
         int bad = 99;
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OK && bad == -1);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_OK && bad == -1);
 
         set[1].gpio = 7;        // analog on a non-ADC pin (GP7) -> INCAPABLE at slot 1
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_INCAPABLE && bad == 1);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_INCAPABLE && bad == 1);
 
         set[1].type = SENSOR_SDI12_GENERIC; set[1].gpio = 6;     // two slots, same pin
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OCCUPIED && bad == 0);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_OCCUPIED && bad == 0);
 
         set[0].gpio = 15; set[1].type = SENSOR_NONE;             // wake button is reserved
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_RESERVED && bad == 0);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_RESERVED && bad == 0);
     }
 
     // --- two-pin slots (HC-SR04 trigger + echo via gpio2) ---
     {
-        savia_sensor_slot_t set[2] = {0};
+        savia_sensor_slot_t set[SAVIA_MAX_SENSORS] = {0};
         set[0].type = SENSOR_HCSR04; set[0].gpio = 6; set[0].gpio2 = 7;
         set[1].type = SENSOR_NONE;   set[1].gpio2 = SAVIA_GPIO_NONE;
         int bad = 99;
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OK);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_OK);
 
         set[0].gpio2 = SAVIA_GPIO_NONE;                          // echo pin missing
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OUT_OF_RANGE && bad == 0);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_OUT_OF_RANGE && bad == 0);
 
         set[0].gpio2 = 6;                                        // echo == trigger
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OCCUPIED && bad == 0);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_OCCUPIED && bad == 0);
 
         set[0].gpio2 = 15;                                       // echo on the wake button
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_RESERVED && bad == 0);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_RESERVED && bad == 0);
 
         set[0].gpio2 = 7;                                        // another slot on the echo pin
         set[1].type = SENSOR_DHT11; set[1].gpio = 7;
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OCCUPIED);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_OCCUPIED);
 
         set[1].gpio = 8;                                         // clean set: HC-SR04 + DHT11
-        assert(pinmap_check_sensors(&cfg, set, 2, &bad) == SAVIA_PIN_ASSIGN_OK);
+        assert(pinmap_check_sensors(&cfg, set, &bad) == SAVIA_PIN_ASSIGN_OK);
 
         // pinmap_build marks BOTH pins of the two-pin slot with the same port.
         station_config_t two = cfg;
-        two.sensor_count = 1;
         two.sensors[0] = set[0];
         savia_pin_info_t pins2[SAVIA_GPIO_COUNT];
         pinmap_build(&two, pins2);
@@ -112,12 +118,30 @@ int main(void) {
         assert(pins2[7].state == SAVIA_PIN_IN_USE && pins2[7].port == 1);
 
         // Actuator: plain DIGITAL single pin.
-        savia_sensor_slot_t act[1] = {0};
+        savia_sensor_slot_t act[SAVIA_MAX_SENSORS] = {0};
         act[0].type = SENSOR_ACTUATOR_DIGITAL; act[0].gpio = 9;
         act[0].gpio2 = SAVIA_GPIO_NONE;
-        assert(pinmap_check_sensors(&cfg, act, 1, &bad) == SAVIA_PIN_ASSIGN_OK);
+        assert(pinmap_check_sensors(&cfg, act, &bad) == SAVIA_PIN_ASSIGN_OK);
     }
 
-    printf("test_pinmap: OK (caps + state + assignment + atomic sensors[] + gpio2)\n");
+    // --- catalog: every type declares its pins/caps and round-trips its token ---
+    // (a missing row is already a build error; this checks the rows are sane)
+    for (int t = SENSOR_NONE + 1; t < SAVIA_SENSOR_TYPE_COUNT; t++) {
+        savia_sensor_type_t type = (savia_sensor_type_t) t;
+        const char *token = sensor_type_token(type);
+        assert(token[0] != '\0');
+        assert(sensor_type_from_token(token, strlen(token)) == type);   // round-trip
+        assert(sensor_type_caps(type) != 0);                            // needs SOME pin
+        uint8_t pins_used = sensor_type_pins(type);
+        assert(pins_used == 1 || pins_used == 2);
+    }
+    assert(sensor_type_from_token("nope", 4) == SENSOR_NONE);           // unknown -> empty
+    assert(sensor_type_pins(SENSOR_HCSR04) == 2);                       // trigger + echo
+    assert(sensor_type_extra(SENSOR_ANALOG_LINEAR) ==
+           (SAVIA_SENSOR_KIND_DEPTH | SAVIA_SENSOR_SCALE_OFFSET));
+    assert(sensor_type_extra(SENSOR_SDI12_GENERIC) == SAVIA_SENSOR_CHANNELS);
+    assert(sensor_type_extra(SENSOR_SDI12_AQUACHECK) == 0);             // fixed layout
+
+    printf("test_pinmap: OK (caps + state + assignment + atomic sensors[] + gpio2 + catalog)\n");
     return 0;
 }

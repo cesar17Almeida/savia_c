@@ -42,6 +42,7 @@ add_executable(savia_c
   src/system/config.c
   src/system/config_store.c
   src/system/pinmap.c
+  src/system/sensor_catalog.c # one row per sensor type (caps, wire token, extra fields)
   src/system/device.c
   src/system/status_led.c    # onboard status LED (paired / BLE on / operating)
   src/system/clock.c

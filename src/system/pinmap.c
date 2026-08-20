@@ -1,4 +1,5 @@
 #include "savia/pinmap.h"
+#include "savia/sensor_catalog.h"
 
 // GPIO inventory for the RP2040 / RP2350 as wired on the Pico W / Pico 2 W.
 // Capabilities are static silicon facts; state is derived from the live config.
@@ -27,25 +28,13 @@ bool pinmap_is_system_reserved(uint8_t gpio) {
 }
 
 uint8_t pinmap_caps_for_sensor(savia_sensor_type_t type) {
-    switch (type) {
-        case SENSOR_SDI12_AQUACHECK:
-        case SENSOR_SDI12_GENERIC:
-        case SENSOR_ONEWIRE_DS18B20:
-            return SAVIA_PIN_CAP_PIO;   // SDI-12 / 1-Wire framing is driven by a PIO program
-        case SENSOR_ANALOG_LINEAR:
-            return SAVIA_PIN_CAP_ADC;   // real analog input -> GP26..GP28 only
-        case SENSOR_DHT11:              // bit-banged proprietary 1-wire timing
-        case SENSOR_HCSR04:             // trigger/echo pulses (both pins DIGITAL)
-        case SENSOR_ACTUATOR_DIGITAL:   // plain GPIO output
-            return SAVIA_PIN_CAP_DIGITAL;
-        default:
-            return 0;
-    }
+    return sensor_type_caps(type);   // one row per type, see savia/sensor_catalog.h
 }
 
-// Second data pin, if the type uses one (HC-SR04 echo). SAVIA_GPIO_NONE = none.
+// Second data pin, for the types the catalog declares as two-pin (HC-SR04
+// trigger/echo). SAVIA_GPIO_NONE = the type only uses `gpio`.
 static uint8_t slot_gpio2(const savia_sensor_slot_t *s) {
-    return s->type == SENSOR_HCSR04 ? s->gpio2 : SAVIA_GPIO_NONE;
+    return sensor_type_pins(s->type) == 2 ? s->gpio2 : SAVIA_GPIO_NONE;
 }
 
 void pinmap_build(const station_config_t *cfg, savia_pin_info_t out[SAVIA_GPIO_COUNT]) {
@@ -80,9 +69,8 @@ void pinmap_build(const station_config_t *cfg, savia_pin_info_t out[SAVIA_GPIO_C
 
     // Sensors claim only still-free pins (validation keeps it that way at runtime).
     // A slot may own TWO pins (HC-SR04 trigger + echo): both carry the same port.
-    uint8_t n = cfg->sensor_count <= SAVIA_MAX_SENSORS ? cfg->sensor_count : SAVIA_MAX_SENSORS;
-    for (uint8_t i = 0; i < n; i++) {
-        if (cfg->sensors[i].type == SENSOR_NONE) continue;
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+        if (!savia_slot_used(&cfg->sensors[i])) continue;
         uint8_t pins[2] = { cfg->sensors[i].gpio, slot_gpio2(&cfg->sensors[i]) };
         for (int p = 0; p < 2; p++) {
             uint8_t g = pins[p];
@@ -106,10 +94,9 @@ savia_pin_assign_t pinmap_check_assign(const station_config_t *cfg, uint8_t gpio
         (gpio == cfg->lora_uart_tx_gpio || gpio == cfg->lora_uart_rx_gpio)) {
         return SAVIA_PIN_ASSIGN_RESERVED;
     }
-    uint8_t n = cfg->sensor_count <= SAVIA_MAX_SENSORS ? cfg->sensor_count : SAVIA_MAX_SENSORS;
-    for (uint8_t i = 0; i < n; i++) {
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
         if ((int) i == exclude_slot) continue;
-        if (cfg->sensors[i].type == SENSOR_NONE) continue;
+        if (!savia_slot_used(&cfg->sensors[i])) continue;
         if (cfg->sensors[i].gpio == gpio) return SAVIA_PIN_ASSIGN_OCCUPIED;
         if (slot_gpio2(&cfg->sensors[i]) == gpio) return SAVIA_PIN_ASSIGN_OCCUPIED;
     }
@@ -117,30 +104,28 @@ savia_pin_assign_t pinmap_check_assign(const station_config_t *cfg, uint8_t gpio
 }
 
 savia_pin_assign_t pinmap_check_sensors(const station_config_t *base,
-                                        const savia_sensor_slot_t *slots, uint8_t n,
+                                        const savia_sensor_slot_t *slots,
                                         int *bad_index) {
     if (bad_index) *bad_index = -1;
-    if (n > SAVIA_MAX_SENSORS) n = SAVIA_MAX_SENSORS;
 
     // Validate the proposed set against a scratch config that keeps `base`'s system
     // reservations (wake button / LoRa UART) but swaps in the NEW sensors -- so a
     // pin shared by two of the new slots is caught as OCCUPIED, not silently kept.
     station_config_t scratch = *base;
-    scratch.sensor_count = n;
-    for (uint8_t i = 0; i < n; i++) scratch.sensors[i] = slots[i];
-    for (uint8_t i = n; i < SAVIA_MAX_SENSORS; i++) scratch.sensors[i].type = SENSOR_NONE;
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) scratch.sensors[i] = slots[i];
 
-    for (uint8_t i = 0; i < n; i++) {
-        if (slots[i].type == SENSOR_NONE) continue;
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+        if (!savia_slot_used(&slots[i])) continue;
         uint8_t need = pinmap_caps_for_sensor(slots[i].type);
         savia_pin_assign_t r = pinmap_check_assign(&scratch, slots[i].gpio, need, (int) i);
         if (r != SAVIA_PIN_ASSIGN_OK) {
             if (bad_index) *bad_index = (int) i;
             return r;
         }
-        // Two-pin types: gpio2 must exist (HC-SR04 without echo -> out of range,
-        // since SAVIA_GPIO_NONE = 0xFF), differ from gpio, and pass the same checks.
-        if (slots[i].type == SENSOR_HCSR04) {
+        // Two-pin types: gpio2 must exist (a two-pin slot without its second pin ->
+        // out of range, since SAVIA_GPIO_NONE = 0xFF), differ from gpio, and pass
+        // the same checks.
+        if (sensor_type_pins(slots[i].type) == 2) {
             if (slots[i].gpio2 == slots[i].gpio) {
                 if (bad_index) *bad_index = (int) i;
                 return SAVIA_PIN_ASSIGN_OCCUPIED;

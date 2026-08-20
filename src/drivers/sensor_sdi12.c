@@ -1,4 +1,5 @@
 #include "savia/sensor.h"
+#include "savia/sensor_catalog.h"
 #include "savia/sdi12.h"
 #include "savia/log.h"
 #include "pico/stdlib.h"
@@ -132,15 +133,11 @@ void sdi12_get_console_result(sdi12_console_result_t *out) {
 
 // --- measurement drivers ------------------------------------------------------
 
+// Only the ADC block needs arming up front; every driver claims its own pins on
+// each measure, so a sensor added over BLE works without a reboot.
 void sensor_init(const station_config_t *cfg) {
+    (void) cfg;
     adc_init();
-    if (!cfg) return;
-    uint8_t n = cfg->sensor_count <= SAVIA_MAX_SENSORS ? cfg->sensor_count : SAVIA_MAX_SENSORS;
-    for (uint8_t i = 0; i < n; i++) {
-        const savia_sensor_slot_t *s = &cfg->sensors[i];
-        if (s->type == SENSOR_ANALOG_LINEAR && s->gpio >= 26 && s->gpio <= 28)
-            adc_gpio_init(s->gpio);
-    }
 }
 
 // Full SDI-12 measurement: aM! -> "atttn" -> wait ttt s -> aD0..Dk until n values.
@@ -200,6 +197,7 @@ static int measure_sdi12(const savia_sensor_slot_t *slot,
 static int measure_analog(const savia_sensor_slot_t *slot,
                           savia_reading_t *out, int max) {
     if (max < 1 || slot->gpio < 26 || slot->gpio > 28) return 0;
+    adc_gpio_init(slot->gpio);          // idempotent; keeps the driver self-contained
     adc_select_input(slot->gpio - 26);
     float raw01 = (float) adc_read() / 4095.0f;
     float value = slot->map.analog.scale * raw01 + slot->map.analog.offset;
@@ -328,16 +326,24 @@ static int measure_ds18b20(const savia_sensor_slot_t *slot,
     return 1;
 }
 
+// Output-only slots (actuators): nothing to read, driven by the supervisor.
+static int measure_none(const savia_sensor_slot_t *slot, savia_reading_t *out, int max) {
+    (void) slot; (void) out; (void) max;
+    return 0;
+}
+
 // Measure one configured slot. Returns readings written, 0 if none, <0 on error.
 // Callers stamp .ts_ms; .port here is 1 and main.c rewrites it per slot index.
+//
+// The dispatch is generated from the catalog, so a type can never reach here
+// without its driver: adding a sensor is one row in savia/sensor_catalog.h plus
+// its measure() above.
 int sensor_measure(const savia_sensor_slot_t *slot, savia_reading_t *out, int max) {
     switch (slot->type) {
-        case SENSOR_SDI12_AQUACHECK:
-        case SENSOR_SDI12_GENERIC:    return measure_sdi12(slot, out, max);
-        case SENSOR_ANALOG_LINEAR:    return measure_analog(slot, out, max);
-        case SENSOR_ONEWIRE_DS18B20:  return measure_ds18b20(slot, out, max);
-        case SENSOR_DHT11:            return measure_dht11(slot, out, max);
-        case SENSOR_HCSR04:           return measure_hcsr04(slot, out, max);
-        default:                      return 0;   // SENSOR_NONE / actuator (output-only)
+#define X(type, token, caps, pins, role, extra, measure) \
+        case type: return measure(slot, out, max);
+        SAVIA_SENSOR_CATALOG(X)
+#undef X
+        default: return 0;                       // SENSOR_NONE (empty slot)
     }
 }

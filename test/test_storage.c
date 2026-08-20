@@ -87,6 +87,55 @@ int main(void) {
     assert(storage_count_pred(0, UINT64_MAX) == 0);
     printf("test_storage: clear OK\n");
 
+    // --- clear_port drops one sensor's data and keeps the rest in FIFO order ---
+    storage_clear();
+    for (int i = 0; i < 9; i++) {
+        savia_reading_t r = { .ts_ms = hour0 + (uint64_t)i * 1000, .port = (uint8_t)(1 + i % 3),
+                              .depth_cm = 10, .kind = READING_SOIL_MOISTURE, .value = (float) i };
+        assert(storage_append_reading(&r));
+    }
+    assert(storage_clear_port(2) == 3);
+    assert(storage_count_raw(0, UINT64_MAX) == 6);
+    savia_reading_t left[16];
+    size_t nleft = storage_query_raw(0, UINT64_MAX, 0, left, 16);
+    assert(nleft == 6);
+    for (size_t i = 0; i < nleft; i++) {
+        assert(left[i].port != 2);
+        if (i) assert(left[i].ts_ms > left[i - 1].ts_ms);   // FIFO order preserved
+    }
+    assert(storage_clear_port(2) == 0);                     // idempotent
+
+    // Same, on a ring that has WRAPPED: the survivors do not start at index 0, so a
+    // naive in-place compaction would overwrite entries it had not read yet.
+    storage_clear();
+    const size_t over = 1400;              // > READINGS_CAP (600): forces a full wrap
+    for (size_t i = 0; i < over; i++) {
+        savia_reading_t r = { .ts_ms = hour0 + (uint64_t)i * 1000, .port = (uint8_t)(1 + i % 3),
+                              .depth_cm = 10, .kind = READING_SOIL_MOISTURE, .value = (float) i };
+        assert(storage_append_reading(&r));
+    }
+    size_t before = storage_count_raw(0, UINT64_MAX);
+    savia_reading_t all[700];
+    size_t nall = storage_query_raw(0, UINT64_MAX, 0, all, 700);
+    size_t want = 0;
+    for (size_t i = 0; i < nall; i++) if (all[i].port != 1) want++;
+    size_t gone = storage_clear_port(1);
+    assert(gone == before - want);
+    assert(storage_count_raw(0, UINT64_MAX) == want);
+    savia_reading_t kept[700];
+    size_t nkept = storage_query_raw(0, UINT64_MAX, 0, kept, 700);
+    assert(nkept == want);
+    for (size_t i = 0; i < nkept; i++) {
+        assert(kept[i].port != 1);
+        if (i) assert(kept[i].ts_ms > kept[i - 1].ts_ms);   // still FIFO, nothing corrupted
+    }
+    // The ring keeps working after the compaction.
+    savia_reading_t more = { .ts_ms = hour0 + 9999000, .port = 5, .depth_cm = 0,
+                             .kind = READING_AIR_TEMPERATURE, .value = 21.0f };
+    assert(storage_append_reading(&more));
+    assert(storage_count_raw(0, UINT64_MAX) == want + 1);
+    printf("test_storage: clear_port OK (incl. wrapped ring)\n");
+
     // --- provisional back-fill: uptime-stamped rows get rebased, epoch rows don't ---
     storage_clear();
     savia_reading_t pr = { .port = 1, .depth_cm = 10, .kind = READING_SOIL_MOISTURE };

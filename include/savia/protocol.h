@@ -51,6 +51,10 @@
 #define SAVIA_KIND_AGG   "agg"   // hourly aggregates
 #define SAVIA_KIND_PRED  "pred"  // model output (hs30_forecast)
 #define SAVIA_KIND_LOGS  "logs"  // recent firmware log lines (array of text)
+// GPIO inventory. Same payload the 0015 read serves, but chunked: at ~1.1 KB it
+// blows past the 512 B ATT ceiling on a plain characteristic read, so the app
+// asks for it here instead.
+#define SAVIA_KIND_PINMAP "pinmap"
 
 // Max bytes for a control message on a single write/notify (above -> chunked).
 #define SAVIA_MAX_CONTROL_MSG_BYTES 512

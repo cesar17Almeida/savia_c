@@ -22,12 +22,38 @@ propio solo enchufándolo. Eso siempre requiere un driver nuevo en firmware → 
 
 ## 2. El catálogo (`savia_sensor_type_t`)
 
-| `type` (wire) | Interfaz | Pin (capacidad) | Mapeo que aporta el instalador |
-|---|---|---|---|
-| `sdi12_aquacheck` | SDI-12 | PIO (cualquier GPIO) | nada — layout fijo (10/30 cm…) |
-| `sdi12_generic` | SDI-12 | PIO | `chan[]`: valor-índice → `{kind, depth_cm}` |
-| `analog_linear` | ADC | **ADC: solo GP26-28** | `kind`, `depth_cm`, `scale`, `offset` |
-| `onewire_ds18b20` | 1-Wire | PIO | opcional `kind`/`depth_cm` (def. `soil_temperature`) |
+Cada tipo es **una fila** en `include/savia/sensor_catalog.h`; esa tabla es la única
+descripción de lo que un tipo es (token de wire, capacidad de pin, nº de pines, rol,
+campos extra de config, función de medida). Añadir un sensor = una fila + su
+`measure()`; olvidar la fila es error de compilación.
+
+| `type` (wire) | Rol | Interfaz | Pin (capacidad) | Mapeo que aporta el instalador |
+|---|---|---|---|---|
+| `sdi12_aquacheck` | entrada | SDI-12 | PIO (cualquier GPIO) | nada — layout fijo (10/30 cm…) |
+| `sdi12_generic` | entrada | SDI-12 | PIO | `chan[]`: valor-índice → `{kind, depth_cm}` |
+| `analog_linear` | entrada | ADC | **ADC: solo GP26-28** | `kind`, `depth_cm`, `scale`, `offset` |
+| `onewire_ds18b20` | entrada | 1-Wire | PIO | opcional `kind`/`depth_cm` (def. `soil_temperature`) |
+| `dht11` | entrada | 1 pin digital | DIGITAL | nada — entrega temp. + humedad de aire |
+| `hc_sr04` | entrada | 2 pines (trigger + echo) | DIGITAL | nada — distancia en mm; `unit` opcional |
+| `actuator` | **salida** | 1 pin digital | DIGITAL | nada — no decodifica, se conmuta |
+
+### 2.1. Entradas y salidas (`role`)
+
+El rol es una **columna del catálogo**, no algo implícito en que el tipo use
+`measure_none`. Una **entrada** mide y guarda lecturas en su cadencia; una **salida**
+sólo se conduce. Consecuencias, todas derivadas de `sensor_type_is_output()`:
+
+- El **planificador** ignora las salidas: no ponen bit en `capture_mask` y **no acotan
+  la siesta** (`scheduler_next_sleep_s`). Despertar la placa para no medir nada es
+  batería tirada; una estación con sólo salidas nunca despierta a capturar.
+- El slot **sigue ocupando puerto** y sigue pasando por el `pinmap`: una salida
+  reserva su GPIO y colisiona con un sensor igual que cualquier otro tipo.
+- `interval_s` **no aplica** a una salida. El firmware lo ignora y la app ni lo
+  pregunta (el asistente de TerraLink va `tipo → pin → resumen` para un actuador).
+- **Estado físico:** `sync_output_pins()` (`main.c`) conduce cada salida a su estado
+  lógico en el arranque y en cada ciclo, y libera a LOW la que deja de ser salida.
+  Sin eso el pin flota hasta el primer `act` y es la placa de relés quien decide.
+  La semántica es **activo-alto**: `ON` = pin a nivel alto.
 
 ### DS18B20 (la "tercera familia" de interfaz)
 
@@ -112,12 +138,17 @@ Tobías no cambia; los demás tipos añaden sus campos.
 
 ## 6. Frecuencia de lectura
 
-Es **global** (`capture_interval_s`, campo ya existente, suelo `SAVIA_CAPTURE_MIN_S`
-= 60 s por el AquaCheck), no por-sensor: el LSTM consume medias horarias, todos los
-sensores se muestrean juntos y una cadencia por-sensor complicaría la agregación y
-el planificador de deep-sleep sin ganancia agronómica. La app la edita en el patch
-`…0013` (`capture_s`). El `scheduler` ya la consume y la respeta sobre el
-`sleep_seconds` (despertar obligatorio para capturar).
+**Por sensor** (revisado jun-2026; antes era sólo global). Cada slot lleva
+`sample_interval_s`, con suelo `SAVIA_CAPTURE_MIN_S` = 60 s (lo impone el AquaCheck)
+y techo 24 h; `0` = seguir la cadencia **global** `capture_interval_s`, que se
+mantiene como fallback. El `scheduler` guarda un vencimiento por slot
+(`next_sensor_ms[]`), devuelve un `capture_mask` (bit por slot) y acota la siesta al
+sensor más próximo, por encima de `sleep_seconds` (despertar obligatorio para
+capturar). La app edita el intervalo por sensor en la entrada de `sensors[]`
+(`interval_s`) y el global como `capture_s`, en el mismo patch `…0013`.
+
+**Las salidas quedan fuera de todo esto** (ver §2.1): no tienen cadencia, no entran
+en el `capture_mask` y no acotan la siesta.
 
 ## 7. Tests (host, sin SDK/HW)
 

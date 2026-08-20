@@ -15,12 +15,12 @@ echo "== 1) config test =="
 
 echo ""
 echo "== 1b) pinmap test =="
-"$CC" $CFLAGS test/test_pinmap.c src/system/pinmap.c src/system/config.c -o /tmp/savia_test_pinmap
+"$CC" $CFLAGS test/test_pinmap.c src/system/pinmap.c src/system/sensor_catalog.c src/system/config.c -o /tmp/savia_test_pinmap
 /tmp/savia_test_pinmap
 
 echo ""
 echo "== 1c) sensors config test (parse + atomic validation + serialize) =="
-"$CC" $CFLAGS test/test_sensors.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c src/system/actuator.c -o /tmp/savia_test_sensors
+"$CC" $CFLAGS test/test_sensors.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c src/system/sensor_catalog.c src/system/actuator.c -o /tmp/savia_test_sensors
 /tmp/savia_test_sensors
 
 echo ""
@@ -35,7 +35,7 @@ echo "== 2a) inference input pipeline test (scaler + gather + tensors) =="
 
 echo ""
 echo "== 2b) scheduler test =="
-"$CC" $CFLAGS test/test_scheduler.c src/power/scheduler.c src/system/config.c -o /tmp/savia_test_sched
+"$CC" $CFLAGS test/test_scheduler.c src/power/scheduler.c src/system/config.c src/system/sensor_catalog.c -o /tmp/savia_test_sched
 /tmp/savia_test_sched
 
 echo ""
@@ -65,7 +65,7 @@ if [ ! -x "$PYTHON" ]; then
   echo "  !! falta $PYTHON (venv de savia_py con cbor2); salto el cross-check"
 else
   "$PYTHON" test/crosscheck_ble_codec.py gen
-  "$CC" $CFLAGS test/test_ble_codec.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c src/system/actuator.c -o /tmp/savia_test_ble
+  "$CC" $CFLAGS test/test_ble_codec.c src/ble/ble_codec.c src/codec/cbor.c src/system/config.c src/system/pinmap.c src/system/sensor_catalog.c src/system/actuator.c -o /tmp/savia_test_ble
   /tmp/savia_test_ble
   "$PYTHON" test/crosscheck_ble_codec.py check
 fi

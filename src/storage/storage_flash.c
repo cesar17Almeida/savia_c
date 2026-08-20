@@ -70,6 +70,43 @@ bool storage_upsert_reading(const savia_reading_t *r, bool *created) {
     return storage_append_reading(r);
 }
 
+// Reverse the raw slice [a, b) of the readings array.
+static void rd_reverse(size_t a, size_t b) {
+    while (a + 1 < b) {
+        savia_reading_t t = s_rd[a];
+        s_rd[a] = s_rd[--b];
+        s_rd[b] = t;
+        a++;
+    }
+}
+
+// Normalise the ring so the oldest entry sits at index 0 (head = count). Only a
+// FULL ring can be off-zero, and then the block starts at head; three reversals
+// rotate it home in O(n) with no scratch buffer -- 600 readings would be ~10 KB
+// of stack we do not have.
+static void rd_normalise(void) {
+    size_t start = ring_start(s_rd_count, s_rd_head, READINGS_CAP);
+    if (start == 0) return;
+    rd_reverse(0, start);
+    rd_reverse(start, READINGS_CAP);
+    rd_reverse(0, READINGS_CAP);
+    s_rd_head = s_rd_count % READINGS_CAP;
+}
+
+size_t storage_clear_port(uint8_t port) {
+    if (s_rd_count == 0) return 0;
+    rd_normalise();                       // now the block is [0, s_rd_count)
+    size_t kept = 0, removed = 0;
+    for (size_t i = 0; i < s_rd_count; i++) {
+        if (s_rd[i].port == port) { removed++; continue; }
+        if (kept != i) s_rd[kept] = s_rd[i];   // dest always trails src
+        kept++;
+    }
+    s_rd_count = kept;
+    s_rd_head  = kept % READINGS_CAP;
+    return removed;
+}
+
 size_t storage_query_raw(uint64_t from_ms, uint64_t to_ms, size_t limit,
                          savia_reading_t *out, size_t out_cap) {
     size_t eff = out_cap;
