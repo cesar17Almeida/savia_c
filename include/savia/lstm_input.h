@@ -43,6 +43,15 @@
 // window past the bound and stops LOCAL inference, which is intended: the model
 // was trained on hourly series.
 #define LSTM_MAX_STALE_HOURS 0
+
+// Longest run of consecutive missing hours the LOCF fill may bridge INSIDE the
+// window. Same reasoning as the staleness bound, applied to interior holes rather
+// than to the newest one: a copied span cannot represent a discrete event, so the
+// longer it is, the likelier it hides a shower or an irrigation the model never
+// sees. The coverage floor above does not catch this on its own -- 30 real hours
+// with an 18 h hole in the middle clears it. Mirrors MAX_SOIL_GAP_H in the backend
+// (savia-cloud services.py): both ends judge a window by the same three guards.
+#define LSTM_MAX_GAP_HOURS 6
 #define LSTM_PAST_FEATURES  3
 #define LSTM_FUTURE_STEPS   24
 #define LSTM_OUTPUT_STEPS   24
@@ -63,6 +72,7 @@ typedef enum {
     LSTM_INPUT_INSUFFICIENT_HISTORY = -1,  // no HS10/HS30 history to build the window
     LSTM_INPUT_NO_FORECAST          = -2,  // TA past/future window not available
     LSTM_INPUT_STALE_HISTORY        = -3,  // soil history is there but stops too far back
+    LSTM_INPUT_GAP_TOO_LONG         = -4,  // a run of missing hours too long to bridge
 } lstm_input_status_t;
 
 // Human-readable reason, for the logs the app reads over BLE ("status=-3" tells

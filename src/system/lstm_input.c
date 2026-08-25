@@ -19,8 +19,9 @@
 // RECENT, and a dead probe only shows up in the second.
 static int fill_series(const savia_aggregate_t *aggs, size_t n,
                        uint64_t latest_hour, uint8_t kind, uint8_t depth_cm,
-                       float *series, int *newest_age) {
+                       float *series, int *newest_age, int *worst_gap) {
     *newest_age = LSTM_PAST_STEPS;                                  // nothing real yet
+    *worst_gap  = LSTM_PAST_STEPS;
     bool present[LSTM_PAST_STEPS] = { false };
     for (size_t i = 0; i < n; i++) {
         if (aggs[i].kind != kind || aggs[i].depth_cm != depth_cm) continue;
@@ -40,6 +41,17 @@ static int fill_series(const savia_aggregate_t *aggs, size_t n,
     }
     if (first < 0) return 0;                                        // no data at all
     *newest_age = (LSTM_PAST_STEPS - 1) - last;
+
+    // Longest run of missing hours between the first and the last real bucket. The
+    // leading and trailing runs are already covered by the coverage floor and the
+    // staleness bound, so only interior holes matter here.
+    int gap = 0;
+    *worst_gap = 0;
+    for (int i = first + 1; i <= last; i++) {
+        gap = present[i] ? 0 : gap + 1;
+        if (gap > *worst_gap) *worst_gap = gap;
+    }
+
     for (int i = 0; i < first; i++) series[i] = series[first];      // leading gap
     for (size_t i = (size_t) first + 1; i < LSTM_PAST_STEPS; i++)   // interior/trailing
         if (!present[i]) series[i] = series[i - 1];
@@ -60,13 +72,17 @@ lstm_input_status_t lstm_gather_inputs(uint64_t now_ms, lstm_raw_inputs_t *out) 
     // history (one hour of readings back-filled across two days is not one), the
     // staleness bound catches a veteran station whose probe died hours ago -- that
     // one clears the floor easily and would forecast from soil that no longer exists.
-    int age10, age30;
-    int real10 = fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 10, out->hs10, &age10);
-    int real30 = fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 30, out->hs30, &age30);
+    int age10, age30, gap10, gap30;
+    int real10 = fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 10,
+                             out->hs10, &age10, &gap10);
+    int real30 = fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 30,
+                             out->hs30, &age30, &gap30);
     if (real10 < LSTM_MIN_PAST_HOURS || real30 < LSTM_MIN_PAST_HOURS)
         return LSTM_INPUT_INSUFFICIENT_HISTORY;
     if (age10 > LSTM_MAX_STALE_HOURS || age30 > LSTM_MAX_STALE_HOURS)
         return LSTM_INPUT_STALE_HISTORY;
+    if (gap10 > LSTM_MAX_GAP_HOURS || gap30 > LSTM_MAX_GAP_HOURS)
+        return LSTM_INPUT_GAP_TOO_LONG;
 
     // TA (past + future) from the weather cache. WEATHER_PAST_MAX / FUTURE_MAX are
     // exactly the LSTM window, so we require a full cache and align the newest past
@@ -87,6 +103,7 @@ const char *lstm_input_status_str(lstm_input_status_t st) {
         case LSTM_INPUT_INSUFFICIENT_HISTORY: return "not enough real soil history yet";
         case LSTM_INPUT_NO_FORECAST:          return "no air-temperature forecast cached";
         case LSTM_INPUT_STALE_HISTORY:        return "soil probe has no recent reading";
+        case LSTM_INPUT_GAP_TOO_LONG:         return "soil history has too long a gap";
     }
     return "unknown";
 }

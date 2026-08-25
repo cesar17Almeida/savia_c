@@ -168,13 +168,27 @@ int main(void) {
     }
     assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_OK);   // both still fresh
 
-    // A gap in the MIDDLE is what LOCF is for and must still pass, however wide,
-    // as long as the newest bucket is fresh and coverage clears the floor.
+    // --- continuity bound: an interior run of missing hours ---
+    // Window slots run 0 (oldest) .. 47 (the hour being inferred). Bridging a hole
+    // with LOCF is fine up to LSTM_MAX_GAP_HOURS; past it the copied span could hide
+    // a shower or an irrigation, so the window is refused even though coverage and
+    // freshness both pass.
+
+    // Exactly at the bound: slots 22..27 missing (6 h). Coverage 42/48, newest real.
     storage_init();
-    seed_soil_hours(latest - 20 * HOUR_MS, 28);   // oldest block, ends 20 h back
-    seed_soil_hours(latest, 20);                  // fresh block, up to now
+    weather_set(pta, WEATHER_PAST_MAX, fta, WEATHER_FUTURE_MAX, now);
+    seed_soil_hours(latest - 26 * HOUR_MS, 22);   // slots 0..21
+    seed_soil_hours(latest, 20);                  // slots 28..47
     assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_OK);
-    printf("test_inference: staleness bound OK\n");
+
+    // One hour past the bound: slots 21..27 missing (7 h). Coverage is still 41/48
+    // and the newest bucket is real -- only the continuity check sees it.
+    storage_init();
+    weather_set(pta, WEATHER_PAST_MAX, fta, WEATHER_FUTURE_MAX, now);
+    seed_soil_hours(latest - 27 * HOUR_MS, 21);   // slots 0..20
+    seed_soil_hours(latest, 20);                  // slots 28..47
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_GAP_TOO_LONG);
+    printf("test_inference: staleness + continuity bounds OK\n");
 
     // --- build tensors: scaling + model column order [TA, HS10, HS30] ---
     memset(&raw, 0, sizeof(raw));
