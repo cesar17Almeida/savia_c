@@ -29,6 +29,11 @@ echo "== 2) storage + clock test =="
 /tmp/savia_test_storage
 
 echo ""
+echo "== 2z) storage persistence test (serialize/restore + dirty + TA staleness) =="
+"$CC" $CFLAGS test/test_storage_persist.c src/storage/storage_flash.c src/system/weather.c -o /tmp/savia_test_persist -lm
+/tmp/savia_test_persist
+
+echo ""
 echo "== 2a) inference input pipeline test (scaler + gather + tensors) =="
 "$CC" $CFLAGS test/test_inference.c src/system/scaler.c src/system/lstm_input.c src/storage/storage_flash.c src/system/weather.c -o /tmp/savia_test_inference -lm
 /tmp/savia_test_inference

@@ -157,19 +157,46 @@ static void mock_one(const char *kind) {
             if (idx < 0) idx = 0;
             if (idx > 71) idx = 71;
 
-            savia_reading_t r1 = { .ts_ms = t, .port = 1, .kind = READING_AIR_TEMPERATURE, .depth_cm = 0, .value = m_ta[idx] };
+            // Soil only: an air-temperature reading on port 1 would show up as the
+            // soil probe having measured the air. The LSTM takes its TA from the
+            // weather cache, never from readings, so nothing here needs one.
             savia_reading_t r2 = { .ts_ms = t, .port = 1, .kind = READING_SOIL_MOISTURE, .depth_cm = 10, .value = m_hs10[idx] };
             savia_reading_t r3 = { .ts_ms = t, .port = 1, .kind = READING_SOIL_MOISTURE, .depth_cm = 30, .value = m_hs30[idx] };
-            storage_append_reading(&r1); storage_append_reading(&r2); storage_append_reading(&r3);
+            storage_append_reading(&r2); storage_append_reading(&r3);
         }
-        LOG_INFO("BLE: mock 48h history mapped to D-2..D0 CSV values\n");
+        // The CSV's air temperature goes to the WEATHER CACHE, not to readings:
+        // that is where the LSTM reads TA from, and it is the only place a station
+        // with no air thermometer can honestly hold one. Past window ends at the
+        // current hour, future covers the next 24 -- the alignment lstm_gather_inputs
+        // expects. Same index mapping as the loop above.
+        {
+            float wpast[WEATHER_PAST_MAX], wfut[WEATHER_FUTURE_MAX];
+            for (int k = 0; k < WEATHER_PAST_MAX; k++) {
+                int idx = 1 + (int) current_hour + k;
+                if (idx < 0) idx = 0;
+                if (idx > 71) idx = 71;
+                wpast[k] = m_ta[idx];
+            }
+            for (int j = 0; j < WEATHER_FUTURE_MAX; j++) {
+                int idx = 48 + (int) current_hour + j + 1;
+                if (idx < 0) idx = 0;
+                if (idx > 71) idx = 71;
+                wfut[j] = m_ta[idx];
+            }
+            weather_set(wpast, WEATHER_PAST_MAX, wfut, WEATHER_FUTURE_MAX, now);
+        }
+        LOG_INFO("BLE: mock 48h history mapped to D-2..D0 CSV values (TA -> weather cache)\n");
         return;
     }
 
     savia_reading_t r = { .ts_ms = wall_now(), .port = 1 };
     if (strcmp(kind, "hs10") == 0)      { r.kind = READING_SOIL_MOISTURE;   r.depth_cm = 10; r.value = 0.70f; }
     else if (strcmp(kind, "hs30") == 0) { r.kind = READING_SOIL_MOISTURE;   r.depth_cm = 30; r.value = 0.74f; }
-    else if (strcmp(kind, "ta") == 0)   { r.kind = READING_AIR_TEMPERATURE; r.depth_cm = 0;  r.value = 22.0f; }
+    // "ta" is intentionally absent: air temperature is not something this station
+    // measures, it is something it is TOLD (weather cache, via LoRa downlink or the
+    // BLE weather characteristic). Injecting it as a reading on port 1 would put it
+    // in the soil probe's history.
+
     else return;
     storage_append_reading(&r);
     LOG_INFO("BLE: mock %s\n", kind);

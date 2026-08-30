@@ -25,17 +25,24 @@
 #include "savia/inference.h"
 #include "savia/weather.h"
 #include "savia/scheduler.h"
+#include "savia/storage_store.h"
 #include "savia/log.h"
 
 // Mock dataset baseline (~20 Jun 2026 UTC). Shared by the mock seeding and the
 // boot inference self-test so both anchor to the same window.
 #define MOCK_BASE_MS 1782000000000ULL
 
-// Dev/mock: seed 48 h of hourly readings (HS10, HS30, TA) at boot -- the LSTM's
-// past window -- so the app has a dataset before live sampling accumulates. Also
-// seeds a mock TA forecast into the weather cache (past 48 h + next 24 h) so the
+// Dev/mock: seed 48 h of hourly readings (HS10, HS30) at boot -- the LSTM's past
+// window -- so the app has a dataset before live sampling accumulates. Also seeds
+// a mock TA forecast into the weather cache (past 48 h + next 24 h) so the
 // on-device LSTM path can build a complete window under mock: HS10/HS30 come from
 // these readings, TA (past + future) from the weather cache.
+//
+// NO air-temperature READING is seeded, deliberately. A station whose only probe
+// is a buried soil sensor has no air thermometer, and readings are attributed by
+// PORT: a mock TA on port 1 shows up in the soil probe's own history as if the
+// probe had measured the air, which it cannot. Air temperature reaches this
+// station as a forecast, so the weather cache below is its only honest home.
 static void seed_mock_readings(void) {
     const uint64_t base = MOCK_BASE_MS;   // ~20 Jun 2026 UTC (mock baseline), hour-aligned
     // h = 47..0, NOT 48..1: the newest sample has to land in the base hour itself.
@@ -49,11 +56,8 @@ static void seed_mock_readings(void) {
                                 .kind = READING_SOIL_MOISTURE, .value = 0.70f + drift };
         savia_reading_t r30 = { .ts_ms = ts, .port = 1, .depth_cm = 30,
                                 .kind = READING_SOIL_MOISTURE, .value = 0.74f + drift };
-        savia_reading_t rta = { .ts_ms = ts, .port = 1, .depth_cm = 0,
-                                .kind = READING_AIR_TEMPERATURE, .value = 20.0f + drift * 4.0f };
         storage_append_reading(&r10);
         storage_append_reading(&r30);
-        storage_append_reading(&rta);
     }
     // Mock TA forecast: past[i] ends at the latest hour, future is the next 24 h.
     float ta_past[WEATHER_PAST_MAX], ta_future[WEATHER_FUTURE_MAX];
@@ -216,6 +220,9 @@ int main(void) {
     out_slot_t out_slots[SAVIA_MAX_SENSORS] = { 0 };
     sync_output_pins(out_slots, cfg.sensors);
     storage_init();
+    // Bring back the readings the last power cycle had. Before the mock seed on
+    // purpose: a dev board still gets its synthetic window appended on top.
+    storage_store_load();
     bool mock_seeded = false;
     if (cfg.mock_enabled) { seed_mock_readings(); mock_seeded = true; }   // dev dataset
     ble_init(&cfg);
@@ -236,6 +243,12 @@ int main(void) {
         ble_poll(/*budget_ms=*/3000);
     }
     clock_persist_if_dirty();
+    // Now that the clock is (usually) known, decide whether the stored TA window
+    // still describes the hour we are in. A downlink during the cycle above wins.
+    {
+        uint64_t up0 = to_ms_since_boot(get_absolute_time());
+        storage_store_adopt_weather(clock_is_set() ? clock_now(up0) : 0);
+    }
 
     printf("savia_c up: on_device_inference=%d, sensors=%u, sleep=%us, capture=%us, daily=%02u:%02u\n",
            inference_on_device(), config_sensor_count(&cfg), cfg.sleep_seconds,
@@ -306,11 +319,10 @@ int main(void) {
                                         .kind = READING_SOIL_MOISTURE, .value = 0.70f };
                 savia_reading_t r30 = { .ts_ms = now_ms, .port = 1, .depth_cm = 30,
                                         .kind = READING_SOIL_MOISTURE, .value = 0.74f };
-                savia_reading_t rta = { .ts_ms = now_ms, .port = 1, .depth_cm = 0,
-                                        .kind = READING_AIR_TEMPERATURE, .value = 22.0f };
+                // Soil only, for the reason in seed_mock_readings: a mock air
+                // temperature on port 1 would masquerade as a reading of the probe.
                 storage_append_reading(&r10);
                 storage_append_reading(&r30);
-                storage_append_reading(&rta);
             } else {
                 capture_slots(&live, act.capture_mask, now_ms);
             }
@@ -364,6 +376,12 @@ int main(void) {
         // Persist the sync ring if this cycle's LoRa downlink or a BLE time_sync
         // advanced it (keeps the pre-outage reference fresh for the next reboot).
         clock_persist_if_dirty();
+
+        // 3b. Persist the measurement state, if anything changed. Here and not
+        //     elsewhere: BLE has just been serviced and the nap is next, so the
+        //     ~150 ms of paused radio this costs lands where nothing is waiting on
+        //     it. A phone mid-transfer would notice it anywhere earlier.
+        if (storage_take_dirty()) storage_store_save();
 
         // 4. Nap until the next mandatory wake (capped by sleep_s), or the button.
         //    With deep sleep enabled we power the radio down first (real low power,

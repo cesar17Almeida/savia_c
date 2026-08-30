@@ -59,6 +59,7 @@ add_executable(savia_c
   src/drivers/lora_wioe5.c
   # storage: flash-backed ring
   src/storage/storage_flash.c
+  src/storage/storage_store.c  # A/B flash image of the readings ring + TA window
   # codec: reusable encoders (also linked by the host tests)
   src/codec/cbor.c
   src/codec/sha256.c
