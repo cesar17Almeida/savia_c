@@ -25,6 +25,7 @@
 #include "savia/inference.h"
 #include "savia/weather.h"
 #include "savia/scheduler.h"
+#include "savia/sensor_catalog.h"
 #include "savia/storage_store.h"
 #include "savia/log.h"
 
@@ -164,6 +165,22 @@ static void capture_slots(const station_config_t *cfg, uint8_t mask, uint64_t no
     }
 }
 
+// After a deep-sleep wake the scheduler is a fresh struct: re-derive each input's
+// next due from its newest stored reading so the cadence continues.
+static void seed_schedule_from_storage(savia_scheduler_t *s, const station_config_t *cfg) {
+    size_t n = storage_reading_count();
+    for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
+        if (!savia_slot_used(&cfg->sensors[i]) ||
+            sensor_type_is_output(cfg->sensors[i].type)) continue;
+        uint64_t newest = 0;
+        for (size_t k = 0; k < n; k++) {
+            const savia_reading_t *r = storage_reading_at(k);
+            if (r && r->port == (uint8_t)(i + 1) && r->ts_ms > newest) newest = r->ts_ms;
+        }
+        scheduler_seed_sensor(s, i, newest, cfg);
+    }
+}
+
 // Time source for log line stamps: wall-clock once synced, uptime before that.
 static uint64_t log_clock(bool *wall) {
     uint64_t up = to_ms_since_boot(get_absolute_time());
@@ -176,7 +193,13 @@ static void log_flush(void) { stdio_flush(); }
 
 int main(void) {
     stdio_init_all();
-    sleep_ms(2500);   // let the USB-CDC host attach so EARLY boot logs are visible
+    // A wake from deep sleep is a reboot: read the context the previous power
+    // cycle left in the always-on scratch registers before anything else runs.
+    savia_deep_wake_t wake;
+    power_deep_wake_info(&wake);
+    // Cold boot: let the USB-CDC host attach so EARLY boot logs are visible.
+    // After a deep sleep every second awake is battery: only a short settle.
+    sleep_ms(wake.resumed ? 300 : 2500);
     savia_log_set_clock(log_clock);   // timestamp every log line
     savia_log_set_flush(log_flush);  // drain USB-CDC per line: no dropped logs
 
@@ -201,13 +224,27 @@ int main(void) {
     if (clock_store_load())
         printf("clock: sync ring restored (last known %llu ms)\n",
                (unsigned long long) clock_last_known());
+    // Deep-sleep wake: the always-on timer kept counting while the core was off,
+    // so the clock continues from it (no outage, no provisional readings).
+    if (wake.resumed) {
+        uint64_t up_w = to_ms_since_boot(get_absolute_time());
+        if (clock_resume_from_aon(wake.now_wall_ms, up_w, wake.clock_uncertainty_ms)) {
+            LOG_INFO("power: woke from deep sleep after %u s (%s); clock from the AON timer, +/-%u ms\n",
+                     (unsigned)(wake.slept_ms / 1000u), wake.button ? "button" : "timer",
+                     (unsigned) wake.clock_uncertainty_ms);
+        } else {
+            LOG_WARN("power: deep-sleep clock implausible -> cold start\n");
+            wake.resumed = false;
+        }
+    }
 
     power_init(&cfg);
 
     // Recovery: power on with the wake button held -> factory reset (wipes the
     // password and all settings back to defaults). The reverted BLE name ("Savia")
-    // is the visible confirmation.
-    if (power_reset_button_held(&cfg, SAVIA_FACTORY_RESET_HOLD_MS)) {
+    // is the visible confirmation. Cold boots only: the same button pressed
+    // during a deep sleep is a service request, not a reset.
+    if (!wake.resumed && power_reset_button_held(&cfg, SAVIA_FACTORY_RESET_HOLD_MS)) {
         LOG_WARN("button held at boot -> factory reset (clearing password + config)\n");
         config_load_defaults(&cfg);
         config_store_save(&cfg);
@@ -233,14 +270,32 @@ int main(void) {
     // Show the last LoRa signal (from a prior power cycle) until a fresh ping.
     lora_seed_last_signal(cfg.lora_last_rssi_dbm, cfg.lora_last_snr_ddb,
                           cfg.lora_last_signal_ms);
+    // Deep-sleep wake: same LoRa session as before the nap (the module stayed
+    // powered and joined): no BOOT frame, coords already sent, period gate kept.
+    if (wake.resumed && cfg.lora_enabled) {
+        uint64_t up_l = to_ms_since_boot(get_absolute_time());
+        lora_restore_cycle_state(wake.lora_last_attempt_s, wake.lora_last_soil_hour_s,
+                                 clock_now(up_l), &cfg);
+    }
 
-    // First thing after bring-up: one LoRa cycle, ALWAYS. Its downlink carries the
-    // clock (fresh time even when the LKG ring already seeded one) and flushes any
-    // downlinks queued while the station was off. Then, if the clock is still not
-    // set, hold a short BLE window for a phone that connects first.
+    // First thing after bring-up: one LoRa cycle. On a cold boot it ALWAYS runs:
+    // its downlink carries the clock (fresh time even when the LKG ring already
+    // seeded one) and flushes any downlinks queued while the station was off.
+    // After a deep sleep it only runs when the period is due. Then, if the clock
+    // is still not set, hold a short BLE window for a phone that connects first.
     if (cfg.lora_enabled) lora_cycle(&cfg);
     if (!clock_is_set()) {
         ble_poll(/*budget_ms=*/3000);
+    }
+    // Woken by the technician's button: the same service window the light nap
+    // offers, so the phone can connect before the next power-off.
+    if (wake.resumed && wake.button) {
+        LOG_INFO("power: button wake -> BLE service window\n");
+        ble_poll(/*budget_ms=*/30000);
+        if (ble_take_config_dirty()) {
+            cfg_lock(); station_config_t snap = cfg; cfg_unlock();
+            config_store_save(&snap);
+        }
     }
     clock_persist_if_dirty();
     // Now that the clock is (usually) known, decide whether the stored TA window
@@ -259,7 +314,7 @@ int main(void) {
     // Invoke() runs, and how big the arena really is on this board. Independent of
     // clock/BLE -- the mock data is anchored at MOCK_BASE_MS. Logs go to serial and
     // the BLE "logs" channel. inference_run_daily is a no-op off-device.
-    if (inference_on_device() && cfg.mock_enabled) {
+    if (inference_on_device() && cfg.mock_enabled && !wake.resumed) {
         LOG_INFO("selftest: running on-device LSTM over the mock window...\n");
         int rc = inference_run_daily(MOCK_BASE_MS);
         LOG_INFO("selftest: inference_run_daily rc=%d\n", rc);
@@ -267,6 +322,11 @@ int main(void) {
 
     savia_scheduler_t sched;
     scheduler_init(&sched);
+    // Deep-sleep wake: continue the plan instead of sampling everything at once.
+    if (wake.resumed) {
+        sched.last_daily_day = wake.last_daily_day;
+        seed_schedule_from_storage(&sched, &cfg);
+    }
 
     bool was_timed = clock_is_set();   // back-fill trigger: unset -> set transition
 
@@ -396,7 +456,33 @@ int main(void) {
         }
         savia_wake_reason_t why;
         if (live.deep_sleep_enabled) {
+            // Real deep sleep (RP2350 power manager, P1.7): the chip powers off
+            // and reboots on the alarm or the button; main() continues from the
+            // context stashed in the always-on registers. Only for a nap long
+            // enough to pay for the reboot, with the clock known (the AON timer
+            // carries it) and nothing pending from the app; otherwise the light
+            // nap. If the power manager refuses, the light nap is the fallback
+            // for the rest of this power cycle.
+            uint64_t up_n = to_ms_since_boot(get_absolute_time());
+            uint64_t wall_n = clock_is_set() ? clock_now(up_n) : 0;
+            bool app_busy = ble_is_connected() || ble_lora_ping_pending() ||
+                            ble_lora_at_pending() || ble_sdi12_pending() ||
+                            ble_act_pending() || ble_infer_pending() ||
+                            ble_config_dirty_pending();
             ble_radio_suspend();
+            if (wall_n && nap >= SAVIA_DEEP_SLEEP_MIN_S && !app_busy &&
+                power_deep_sleep_available()) {
+                savia_deep_sleep_ctx_t ctx = {
+                    .now_wall_ms = wall_n,
+                    .uptime_ms = up_n,
+                    .nap_s = nap,
+                    .lora_last_attempt_s = lora_last_attempt_epoch_s(wall_n),
+                    .lora_last_soil_hour_s = lora_last_soil_hour_s(),
+                    .last_daily_day = sched.last_daily_day,
+                    .clock_uncertainty_ms = clock_uncertainty_ms(),
+                };
+                power_deep_sleep_off(&live, &ctx);   // returns only when refused
+            }
             why = power_deep_sleep(&live, nap);
             ble_radio_resume();
         } else {

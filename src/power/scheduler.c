@@ -102,6 +102,13 @@ savia_sched_action_t scheduler_tick(savia_scheduler_t *s, uint64_t now_ms,
     return act;
 }
 
+void scheduler_seed_sensor(savia_scheduler_t *s, uint8_t i, uint64_t last_capture_ms,
+                           const station_config_t *cfg) {
+    if (i >= SAVIA_MAX_SENSORS || last_capture_ms == 0) return;
+    s->next_sensor_ms[i] = last_capture_ms +
+        sensor_interval_ms(cfg->sensors, i, cfg->capture_interval_s);
+}
+
 uint32_t scheduler_next_sleep_s(const savia_scheduler_t *s, uint64_t now_ms,
                                 const station_config_t *cfg) {
     // Soonest sensor due. Output slots are skipped: waking to drive nothing is pure

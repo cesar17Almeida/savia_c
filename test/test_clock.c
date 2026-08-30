@@ -101,6 +101,34 @@ int main(void) {
     assert(!clock_seed_ring(bad, sizeof bad));
     assert(clock_last_known() == 0);
 
-    printf("test_clock: running clock + ring + validation + outage OK\n");
+    // --- deep-sleep resume from the always-on timer ---------------------------
+    {
+        const uint64_t T0 = 1735689600000ULL;   // 2025-01-01T00:00:00Z
+        assert(clock_apply_sync(T0, 0, CLOCK_SRC_LORA, NULL));
+        (void) clock_take_ring_dirty();                              // start clean
+        assert(!clock_resume_from_aon(0, 0, 0));                    // implausible
+        assert(!clock_resume_from_aon(T0 - 3600000ULL, 0, 0));      // behind the LKG
+        assert(clock_uncertainty_ms() == 0);
+        // 2 h later by the AON timer, with 30 s of possible drift.
+        assert(clock_resume_from_aon(T0 + 7200000ULL, 0, 30000));
+        assert(clock_now(1000) == T0 + 7200000ULL + 1000);
+        assert(clock_last_known() == T0 + 7200000ULL);
+        assert(clock_uncertainty_ms() == 30000);
+        assert(!clock_take_ring_dirty());                            // derived: no flash write
+        clock_sample_t s[CLOCK_RING_MAX];
+        assert(clock_get_ring(s, CLOCK_RING_MAX) >= 2);
+        assert(s[0].source == CLOCK_SRC_AON && s[1].source == CLOCK_SRC_LORA);
+        // A real sync 20 s behind the estimate (the oscillator ran fast) is
+        // accepted thanks to the allowance, is not an outage, and clears it.
+        uint64_t out = 99;
+        assert(clock_apply_sync(T0 + 7200000ULL - 20000ULL, 2000, CLOCK_SRC_LORA, &out));
+        assert(out == 0);
+        assert(clock_uncertainty_ms() == 0);
+        assert(clock_take_ring_dirty());
+        // Back to the plain slack: 40 s backward is rejected again.
+        assert(!clock_apply_sync(T0 + 7200000ULL - 60000ULL, 3000, CLOCK_SRC_LORA, NULL));
+    }
+
+    printf("test_clock: running clock + ring + validation + outage + AON resume OK\n");
     return 0;
 }

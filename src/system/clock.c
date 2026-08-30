@@ -13,6 +13,7 @@ static uint8_t        s_count;
 static bool           s_dirty;            // ring changed since last persist
 static bool           s_first_sync_done;  // first accepted sync THIS power cycle
 static uint64_t       s_boot_outage_ms;   // gap measured at that first sync
+static uint32_t       s_uncertainty_ms;   // drift allowance after a deep-sleep resume
 
 void clock_set(uint64_t epoch_ms, uint64_t uptime_ms) {
     s_epoch_base_ms = epoch_ms - uptime_ms;
@@ -60,7 +61,7 @@ bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t sour
     // Monotonic vs the last known-good, tolerating small cross-source jitter. Real
     // time only moves forward; a larger backward jump is a bad reading -> reject.
     uint64_t lk = clock_last_known();
-    if (lk != 0 && epoch_ms + CLOCK_BACKWARD_SLACK_MS < lk) return false;
+    if (lk != 0 && epoch_ms + CLOCK_BACKWARD_SLACK_MS + s_uncertainty_ms < lk) return false;
 
     // Gap vs the previous known-good. On the first sync after a reboot this equals
     // the power-off duration (lk is the pre-outage reference seeded from flash).
@@ -74,8 +75,24 @@ bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t sour
     ring_push(epoch_ms, uptime_ms, (uint8_t) source);
     clock_set(epoch_ms, uptime_ms);
     s_dirty = true;
+    s_uncertainty_ms = 0;   // a real authority replaces the deep-sleep estimate
     return true;
 }
+
+bool clock_resume_from_aon(uint64_t epoch_ms, uint64_t uptime_ms, uint32_t uncertainty_ms) {
+    if (epoch_ms < CLOCK_EPOCH_MIN_MS || epoch_ms >= CLOCK_EPOCH_MAX_MS) return false;
+    uint64_t lk = clock_last_known();
+    if (lk != 0 && epoch_ms + CLOCK_BACKWARD_SLACK_MS < lk) return false;
+    ring_push(epoch_ms, uptime_ms, CLOCK_SRC_AON);
+    clock_set(epoch_ms, uptime_ms);
+    s_uncertainty_ms = uncertainty_ms;
+    // Same plan, same power cycle from the clock's point of view: the first real
+    // sync after this must not be reported as an outage.
+    s_first_sync_done = true;
+    return true;
+}
+
+uint32_t clock_uncertainty_ms(void) { return s_uncertainty_ms; }
 
 // --- persistence bridge (little-endian; host and RP2xxx are both LE) ---------
 

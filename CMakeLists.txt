@@ -118,6 +118,13 @@ target_link_libraries(savia_c
   hardware_adc              # sensores analógicos (analog_linear, GP26-28)
 )
 
+# Deep sleep real (P1.7: apagado del núcleo, despertar por el AON timer o el botón)
+# vía el power manager, que sólo existe en el RP2350 (Pico 2 W). En RP2040 queda
+# la siesta ligera.
+if(PICO_PLATFORM MATCHES "rp2350")
+  target_link_libraries(savia_c hardware_powman)
+endif()
+
 # BLE peripheral vía BTstack sobre el CYW43439 (mismo chip en Pico WH y Pico 2 W).
 # Se enlaza solo con SAVIA_ENABLE_BLE=ON (cuando el módulo BLE esté implementado).
 if(SAVIA_ENABLE_BLE)

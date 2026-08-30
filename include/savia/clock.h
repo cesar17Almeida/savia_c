@@ -17,6 +17,7 @@ typedef enum {
     CLOCK_SRC_NONE = 0,
     CLOCK_SRC_BLE  = 1,   // phone time_sync over BLE
     CLOCK_SRC_LORA = 2,   // TTN downlink clock field
+    CLOCK_SRC_AON  = 3,   // always-on timer across a deep sleep (derived, not a sync)
 } clock_source_t;
 
 // How many authoritative syncs we keep (the user asked for "the last 2-3").
@@ -67,6 +68,18 @@ uint64_t clock_last_sync_ms(void);
 // reboot this is the measured power-off duration.
 bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
                       uint64_t *outage_ms);
+
+// Continue the clock after a deep sleep from the always-on timer that kept
+// counting while the core was off. Sets the running clock and the ring head
+// (source AON) like an accepted sync, but does NOT mark the ring dirty: it is a
+// derived value, not an authority worth a flash write. `uncertainty_ms` is the
+// drift the low-power oscillator may have accumulated: the next real sync is
+// accepted even if it lands that far behind the estimate, and clears it. Rejects
+// (false) an epoch outside the plausibility window or behind the last known-good.
+bool clock_resume_from_aon(uint64_t epoch_ms, uint64_t uptime_ms, uint32_t uncertainty_ms);
+
+// Drift allowance currently added to the backward slack (0 after a real sync).
+uint32_t clock_uncertainty_ms(void);
 
 // Newest known-good epoch across power cycles (ring head), or 0 if the ring is
 // empty. After clock_seed_ring() at boot this is the pre-outage reference.

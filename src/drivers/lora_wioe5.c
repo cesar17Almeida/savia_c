@@ -504,6 +504,40 @@ bool lora_cycle(const station_config_t *cfg) {
     return applied;
 }
 
+uint32_t lora_last_attempt_epoch_s(uint64_t now_wall_ms) {
+    if (!s_attempted || now_wall_ms == 0) return 0;
+    uint32_t up = to_ms_since_boot(get_absolute_time());
+    uint32_t ago_ms = up - s_last_attempt_ms;
+    if (now_wall_ms <= ago_ms) return 0;
+    return (uint32_t)((now_wall_ms - ago_ms) / 1000ULL);
+}
+
+uint32_t lora_last_soil_hour_s(void) { return s_last_soil_hour_s; }
+
+void lora_restore_cycle_state(uint32_t last_attempt_s, uint32_t last_soil_hour_s,
+                              uint64_t now_wall_ms, const station_config_t *cfg) {
+    // From the network's point of view this is the same session: the module
+    // stayed powered and joined, and the backend already has the clock request
+    // and the coords. A second BOOT would cost airtime and a needless downlink.
+    s_boot_sent = true;
+    if (cfg && cfg->has_coords) {
+        s_coords_sent = true;
+        s_coords_lat = cfg->lat_e7;
+        s_coords_lon = cfg->lon_e7;
+    }
+    if (last_soil_hour_s > s_last_soil_hour_s) s_last_soil_hour_s = last_soil_hour_s;
+    uint64_t last_ms = (uint64_t) last_attempt_s * 1000ULL;
+    if (last_attempt_s && now_wall_ms >= last_ms && now_wall_ms - last_ms < 0x7FFFFFFFULL) {
+        // Backdate the uptime gate so the period counts from the real last
+        // attempt (unsigned wrap is fine: the comparison is modular).
+        uint32_t up = to_ms_since_boot(get_absolute_time());
+        s_attempted = true;
+        s_last_attempt_ms = up - (uint32_t)(now_wall_ms - last_ms);
+        LOG_INFO("LoRa: cadence restored after deep sleep (last cycle %us ago)\n",
+                 (unsigned)((now_wall_ms - last_ms) / 1000ULL));
+    }
+}
+
 uint32_t lora_secs_until_due(const station_config_t *cfg) {
     if (!s_ready || !cfg || !s_attempted) return 0;   // first cycle: due now
     uint32_t period_s = cfg->lora_period_s;

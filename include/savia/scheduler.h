@@ -31,6 +31,11 @@ void scheduler_init(savia_scheduler_t *s);
 savia_sched_action_t scheduler_tick(savia_scheduler_t *s, uint64_t now_ms,
                                     const station_config_t *cfg);
 
+// Continue sensor i's cadence after a deep-sleep wake (the struct is fresh after
+// the reboot): next due = its newest stored capture + its interval.
+void scheduler_seed_sensor(savia_scheduler_t *s, uint8_t i, uint64_t last_capture_ms,
+                           const station_config_t *cfg);
+
 // Seconds to nap now: min(sleep_s, soonest sensor due, next daily fire).
 // Never 0 (clamped to >= 1).
 uint32_t scheduler_next_sleep_s(const savia_scheduler_t *s, uint64_t now_ms,

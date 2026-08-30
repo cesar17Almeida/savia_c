@@ -68,8 +68,10 @@ Matriz completa de placas y flags en [`docs/BUILD.md`](docs/BUILD.md).
 3. **Inferir** — pronóstico de humedad 24 h (on-device en Pico 2 W; en la app en Pico WH).
 4. **Servir** — periférico BLE GATT (mismo contrato que `savia_py` → TerraLink + app de Tobías).
 
-Más: canal **LoRa** (Wio-E5), y **deep sleep con despertar por botón** + tiempo de
-sueño parametrizable desde la app (requisitos de la era-Pico).
+Más: canal **LoRa** (Wio-E5), y **suspensión profunda real** entre eventos (RP2350: estado
+P1.7 del *power manager*, chip apagado; despertar por la alarma del AON timer o por el botón,
+y el arranque continúa el plan desde el contexto guardado en los registros *always-on*;
+RP2040: siesta ligera) + tiempo de sueño parametrizable desde la app. Ver `src/power/power.c`.
 
 ## Estructura
 

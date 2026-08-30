@@ -52,6 +52,20 @@ void lora_set_cfg_ack(uint8_t applied, uint8_t rejected);
 // (0 if the clock isn't set yet). Returns true if the node is joined afterwards.
 bool lora_ping(uint8_t tx_gpio, uint8_t rx_gpio, uint64_t now_wall_ms);
 
+// --- deep-sleep continuity ---------------------------------------------------
+
+// Epoch seconds of the last cycle attempt this power cycle (0 = none), given the
+// current wall clock. The supervisor stashes it before powering the chip off.
+uint32_t lora_last_attempt_epoch_s(uint64_t now_wall_ms);
+// Newest soil hour already uplinked (0 = none), for the same stash.
+uint32_t lora_last_soil_hour_s(void);
+// After a wake from deep sleep: continue the cadence instead of starting a new
+// power cycle. No BOOT frame (the backend already answered it), coords already
+// sent, soil resume point kept, and the period gate counted from
+// `last_attempt_s` rather than from this reboot. Call after lora_init().
+void lora_restore_cycle_state(uint32_t last_attempt_s, uint32_t last_soil_hour_s,
+                              uint64_t now_wall_ms, const station_config_t *cfg);
+
 // Current link state for the BLE status payload.
 void lora_get_status(lora_status_t *out);
 
