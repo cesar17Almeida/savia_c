@@ -279,6 +279,10 @@ static bool    s_ack_pending;
 static uint8_t s_ack_applied, s_ack_rejected;
 static uint8_t s_cfg_tlv[LORA_DOWNLINK_MAX];
 static size_t  s_cfg_tlv_len;          // 0 = none pending
+// The BOOT frame is the first uplink of every power cycle: it tells the backend
+// the node just came up without a clock, so the backend answers with the time
+// in that very RX window instead of waiting for its 6 h cadence.
+static bool    s_boot_sent;
 // Coords already uplinked this power cycle (re-sent when they change).
 static bool    s_coords_sent;
 static int32_t s_coords_lat, s_coords_lon;
@@ -333,18 +337,31 @@ static uint8_t build_soil_recs(uint64_t now_ms, lora_soil_rec_t *recs) {
     return n;
 }
 
-// Send one confirmed uplink (payload picked by state/mode) and apply any
-// downlink. Captures the ACK's RSSI/SNR into the last-signal state, stamped with
-// now_wall_ms. Assumes joined. Returns true if a downlink was decoded/stashed.
+// Send one uplink (payload picked by state/mode) and apply any downlink.
+//
+// The periodic cycle sends UNCONFIRMED frames (AT+MSGHEX): on a marginal link the
+// acknowledgement travels through the weaker downlink direction, a missing ACK
+// made the module retry and drop the session, and the confirmation the system
+// needs lives in the application layer anyway (CFG_ACK). The app's diagnostic
+// ping (cfg == NULL) stays CONFIRMED: its purpose is to measure the link, and the
+// ACK is what carries RSSI/SNR back when no downlink is queued.
+// Any reported RSSI/SNR lands in the last-signal state, stamped with now_wall_ms.
+// Assumes joined. Returns true if a downlink was decoded/stashed.
 static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     uint8_t payload[LORA_UPLINK_MAX];
     size_t plen = 0;
     lora_soil_rec_t soil[LORA_SOIL_RECS_MAX];
     uint8_t nsoil = 0;
+    const bool confirmed = (cfg == NULL);
+    bool boot_frame = false;
 
-    // Priority: pending CFG_ACK > dirty coords > mode payload. cfg==NULL (the
-    // app's ping) always sends the plain forecast payload.
-    if (s_ack_pending) {
+    // Priority: BOOT (once per power cycle) > pending CFG_ACK > dirty coords >
+    // mode payload. cfg==NULL (the app's ping) always sends the plain forecast.
+    if (cfg && !s_boot_sent) {
+        uint32_t lkg_s = (uint32_t) (clock_last_known() / 1000ULL);
+        plen = lora_encode_uplink_boot(lkg_s, payload, sizeof payload);
+        boot_frame = true;
+    } else if (s_ack_pending) {
         plen = lora_encode_uplink_cfg_ack(s_ack_applied, s_ack_rejected,
                                           payload, sizeof payload);
     } else if (cfg && cfg->has_coords &&
@@ -378,10 +395,10 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     static const char *fail[]  = { "ERROR", "Please join", "Not join" };
     char rx_hex[2 * LORA_DOWNLINK_MAX + 1];
     s_signal_seen = false;                       // capture this uplink's ACK signal
-    snprintf(cmd, sizeof cmd, "AT+CMSGHEX=\"%s\"", tx_hex);
+    snprintf(cmd, sizeof cmd, "AT+%sMSGHEX=\"%s\"", confirmed ? "C" : "", tx_hex);
     at_status_t st = at_exec(cmd, until, 1, fail, 3, LORA_UPLINK_TIMEOUT_MS,
                              rx_hex, sizeof rx_hex);
-    if (s_signal_seen) {                          // the ACK reported RSSI/SNR
+    if (s_signal_seen) {                          // an ACK or a downlink reported RSSI/SNR
         s_has_signal = true;
         if (now_wall_ms) s_last_signal_ms = now_wall_ms;   // keep prior stamp if clock unset
         LOG_INFO("LoRa: signal RSSI %d dBm, SNR %d.%d dB\n",
@@ -395,7 +412,10 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     if (st == AT_TIMEOUT) { LOG_WARN("LoRa: uplink timeout\n"); return false; }
 
     // Uplink went out: settle the send-once state for the payload we just sent.
-    if (s_ack_pending) {
+    if (boot_frame) {
+        s_boot_sent = true;
+        LOG_INFO("LoRa: boot uplink sent (asks for the clock)\n");
+    } else if (s_ack_pending) {
         s_ack_pending = false;
     } else if (cfg && cfg->has_coords &&
                (!s_coords_sent || s_coords_lat != cfg->lat_e7 || s_coords_lon != cfg->lon_e7)) {

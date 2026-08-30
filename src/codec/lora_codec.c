@@ -95,6 +95,17 @@ size_t lora_encode_uplink_cfg_ack(uint8_t applied, uint8_t rejected,
     return 4;
 }
 
+size_t lora_encode_uplink_boot(uint32_t lkg_epoch_s, uint8_t *out, size_t cap) {
+    if (cap < 6) return 0;
+    out[0] = LORA_CODEC_VERSION;
+    out[1] = LORA_UP_BOOT;
+    out[2] = (uint8_t) (lkg_epoch_s >> 24);
+    out[3] = (uint8_t) (lkg_epoch_s >> 16);
+    out[4] = (uint8_t) (lkg_epoch_s >> 8);
+    out[5] = (uint8_t) lkg_epoch_s;
+    return 6;
+}
+
 // --- downlink -----------------------------------------------------------------
 
 size_t lora_encode_downlink_time_ta(const float *past_ta, uint8_t n_past,

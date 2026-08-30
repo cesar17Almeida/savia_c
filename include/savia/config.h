@@ -11,7 +11,7 @@
 
 // How many returned values a generic SDI-12 sensor can be mapped to: the installer
 // labels each value index -> {kind, depth}. Kept small so the slot stays bounded
-// (the whole config must fit one 256 B flash page).
+// (the config record is written as whole 256 B pages inside one 4 KB sector).
 #define SAVIA_SDI12_MAX_CHANNELS 4
 
 // Max advertised BLE name (incl. NUL). The 128-bit service UUID moves to the scan
@@ -24,8 +24,8 @@
 // Minimum capture cadence (the AquaCheck probe needs >= 60 s between reads).
 #define SAVIA_CAPTURE_MIN_S 60u
 // Accepted range for the app-set LoRa cycle period (each cycle = one uplink + the
-// time/TA downlink), seconds: 5 min .. 24 h. The floor keeps a hourly-ish cadence
-// comfortably inside the EU868 ~1% duty cycle even with a big downlink at SF12.
+// time/TA downlink), seconds: 5 min .. 24 h. The floor keeps the node inside the
+// EU868 ~1% duty cycle at SF10; the 80 B forecast downlink only fits RX2 (SF9).
 #define SAVIA_LORA_PERIOD_MIN_S 300u
 #define SAVIA_LORA_PERIOD_MAX_S 86400u
 

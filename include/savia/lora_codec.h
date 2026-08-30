@@ -14,6 +14,11 @@
 //   0x03 COORDS                  [2..5] lat i32 x1e-7 | [6..9] lon i32 x1e-7 |
 //                                [10..11] utc_offset_min i16
 //   0x04 CFG_ACK                 [2] fields applied u8 | [3] fields rejected u8
+//   0x05 (reserved)              generic per-channel uplink, not implemented
+//   0x06 BOOT                    [2..5] lkg_epoch_s u32 (0 = no reference).
+//                                First frame of every power cycle: the node has
+//                                no clock and asks the backend for it in this
+//                                RX window, regardless of the 6 h sync cadence
 //
 // Downlinks (backend -> node):
 //   0x01 TIME_TA                 [2..5] clock u32 epoch s (0 = none) | [6] n_past |
@@ -37,6 +42,7 @@
 #define LORA_UP_SOIL         0x02
 #define LORA_UP_COORDS       0x03
 #define LORA_UP_CFG_ACK      0x04
+#define LORA_UP_BOOT         0x06   // 0x05 stays reserved for the generic uplink
 #define LORA_DN_TIME_TA      0x01
 #define LORA_DN_CONFIG       0x02
 
@@ -99,6 +105,8 @@ size_t lora_encode_uplink_coords(int32_t lat_e7, int32_t lon_e7,
                                  int16_t utc_offset_min, uint8_t *out, size_t cap);
 size_t lora_encode_uplink_cfg_ack(uint8_t applied, uint8_t rejected,
                                   uint8_t *out, size_t cap);
+// BOOT: lkg_epoch_s is the newest known-good clock reference (0 if none).
+size_t lora_encode_uplink_boot(uint32_t lkg_epoch_s, uint8_t *out, size_t cap);
 
 // --- downlink ---------------------------------------------------------------
 // Encode a TIME_TA downlink (used by tests; the backend's Python mirror encodes

@@ -74,7 +74,16 @@ int main(void) {
         const uint8_t want[] = { 0x02, 0x04, 0x03, 0x01 };
         expect_bytes(buf, n, want, sizeof want, "up_cfg_ack");
     }
-    printf("test_lora_codec: v2 coords + cfg_ack golden OK\n");
+    // --- GOLDEN: uplink BOOT (last-known-good 2026-07-01T12:00:00Z = 1782907200) ---
+    {
+        size_t n = lora_encode_uplink_boot(1782907200u, buf, sizeof buf);
+        const uint8_t want[] = { 0x02, 0x06, 0x6A, 0x45, 0x01, 0x40 };
+        expect_bytes(buf, n, want, sizeof want, "up_boot");
+        n = lora_encode_uplink_boot(0, buf, sizeof buf);
+        const uint8_t want0[] = { 0x02, 0x06, 0x00, 0x00, 0x00, 0x00 };
+        expect_bytes(buf, n, want0, sizeof want0, "up_boot_noref");
+    }
+    printf("test_lora_codec: v2 coords + cfg_ack + boot golden OK\n");
 
     // --- downlink TIME_TA: roundtrip + GOLDEN pure-clock (n=0) ---
     {
