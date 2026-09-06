@@ -26,6 +26,15 @@ INFER ?= ON
 # existe, las variables quedan vacias y el firmware usa placeholders a cero.
 -include .env
 
+# Pico SDK y toolchain ARM. Sobreescribibles por entorno o en la línea de
+# comandos; si no, se buscan en sus ubicaciones habituales. El arm-none-eabi-gcc
+# de la fórmula de Homebrew NO trae newlib (el enlace falla con 'nosys.specs'):
+# se prefiere el toolchain oficial de ARM descomprimido en ~/arm-gnu-toolchain/
+# (se toma la versión más alta presente).
+PICO_SDK_PATH ?= $(HOME)/pico-sdk
+PICO_TOOLCHAIN_PATH ?= $(lastword $(sort $(wildcard \
+  $(HOME)/arm-gnu-toolchain/arm-gnu-toolchain-*-arm-none-eabi/bin)))
+
 BUILD := build-$(BOARD)
 INFER_TAG := $(if $(filter ON,$(INFER)),on,off)
 UF2 := $(BUILD)/savia_c-$(BOARD)-ml$(INFER_TAG)device.uf2
@@ -36,7 +45,16 @@ UF2 := $(BUILD)/savia_c-$(BOARD)-ml$(INFER_TAG)device.uf2
 # Reconfigura siempre (cmake es idempotente y barato) para que un cambio de
 # BOARD/BLE/INFER se aplique, y luego construye.
 build:
+	@# cmake no vuelve a buscar el compilador si ya está en la caché: si el que
+	@# hay grabado ya no existe (toolchain movido/borrado), se regenera el build dir.
+	@cc=$$(sed -n 's/^CMAKE_C_COMPILER:[A-Z]*=//p' $(BUILD)/CMakeCache.txt 2>/dev/null); \
+	if [ -n "$$cc" ] && [ ! -x "$$cc" ]; then \
+	  echo "==> el compilador cacheado ya no existe ($$cc): regenerando $(BUILD)"; \
+	  rm -rf $(BUILD); \
+	fi
 	cmake -S . -B $(BUILD) -G Ninja \
+	  -DPICO_SDK_PATH=$(PICO_SDK_PATH) \
+	  $(if $(PICO_TOOLCHAIN_PATH),-DPICO_TOOLCHAIN_PATH=$(PICO_TOOLCHAIN_PATH)) \
 	  -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER) \
 	  -DSAVIA_LORA_DEV_EUI=$(LORA_DEV_EUI) \
 	  -DSAVIA_LORA_APP_EUI=$(LORA_APP_EUI) \

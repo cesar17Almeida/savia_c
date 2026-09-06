@@ -106,3 +106,25 @@ export PICO_SDK_PATH=$HOME/pico-sdk
 
 Después, los comandos de compilación de arriba. **Compilar no requiere el Pico**;
 la placa solo hace falta para flashear y ejecutar.
+
+### Dónde busca el Makefile el SDK y el toolchain
+
+`make build` pasa siempre a cmake `PICO_SDK_PATH` y `PICO_TOOLCHAIN_PATH`, así que
+no dependen de lo que haya en el `PATH` ni de una caché anterior:
+
+- `PICO_SDK_PATH`: por defecto `~/pico-sdk`.
+- `PICO_TOOLCHAIN_PATH`: por defecto la versión más alta de
+  `~/arm-gnu-toolchain/arm-gnu-toolchain-*-arm-none-eabi/bin` (toolchain
+  oficial de ARM descomprimido ahí). Si no hay ninguna, cmake busca
+  `arm-none-eabi-gcc` en el `PATH`.
+
+Ambas se pueden sobreescribir por entorno o en la línea de comandos
+(`make build PICO_TOOLCHAIN_PATH=/ruta/al/bin`).
+
+> El `arm-none-eabi-gcc` de la **fórmula** de Homebrew no incluye newlib y el
+> enlace falla con `nosys.specs`; usa el toolchain oficial de ARM (o el cask
+> `gcc-arm-embedded`).
+
+Si se mueve o borra el toolchain con el que se configuró un `build-*/`, cmake no
+lo vuelve a buscar (queda grabado en `CMakeCache.txt`); el Makefile lo detecta y
+regenera el directorio de build automáticamente. A mano: `make clean`.

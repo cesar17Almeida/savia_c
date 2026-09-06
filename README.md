@@ -88,5 +88,5 @@ savia_c/
 
 ## Contrato BLE
 
-Idéntico al de `savia_py` (documentado en `docs/integracion_ble_savia_tobias.md`
+Idéntico al de `savia_py` (documentado en `docs/interfaces/integracion_ble_savia_tobias.md`
 del repo TFM). La app no distingue si el periférico es una Pi o un Pico.

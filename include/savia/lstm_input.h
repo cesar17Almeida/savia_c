@@ -1,6 +1,6 @@
 // Builds the LSTM's two input tensors from station data and un-scales its output.
 // Pure logic (storage + weather are SDK-free), so it host-tests. Contract:
-// docs/plan_implementacion_modelo.md + the model's scaler_params.json.
+// docs/model/plan_implementacion_modelo.md + the model's scaler_params.json.
 //
 //   past   : 48 h x 3 features, StandardScaler space, model order [TA, HS10, HS30]
 //   future : 24 h x 1 feature (TA), StandardScaler space

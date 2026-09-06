@@ -1,6 +1,6 @@
 // BLE GATT contract -- the SAME wire contract as savia_py, so TerraLink and
 // Tobias' app talk to the Pico exactly as they did to the Pi. Reference:
-// docs/integracion_ble_savia_tobias.md in the TFM repo.
+// docs/interfaces/integracion_ble_savia_tobias.md in the TFM repo.
 #ifndef SAVIA_PROTOCOL_H
 #define SAVIA_PROTOCOL_H
 
