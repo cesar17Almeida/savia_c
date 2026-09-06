@@ -4,6 +4,7 @@
 #include "savia/log.h"
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
+#include "hardware/sync.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -11,6 +12,11 @@
 //   - SDI-12 (AquaCheck / generic): bit-banged 1200 7E1 INVERTED on one wire,
 //     oversampled RX decode -- ported from tools/sdi12_bringup (validated on the
 //     real probe 2026-06-27, see AQUACHECK_RESPONSES.md). 3.3 V direct, no shifter.
+//     The exchange runs with interrupts masked: BLE lives in a background IRQ
+//     (cyw43 threadsafe_background) and a few ms of it in the middle of a 104 us
+//     sampling grid turned characters into garbage -- the live probe screen saw
+//     4-sensor replies come back with 2 or 3 values. Parity and the stop bit are
+//     checked so what does slip through is flagged, never mistaken for a number.
 //   - DHT11: proprietary single-wire us protocol, bit-banged.
 //   - HC-SR04: 10 us trigger pulse on gpio, echo width on gpio2 -> distance mm.
 //   - analog linear: ADC read (GP26..28), value = scale*raw01 + offset.
@@ -58,21 +64,34 @@ static int sdi_capture(uint8_t gpio, uint32_t window_ms) {
     return total;
 }
 
+// Characters of the last decode that failed parity or framing (for the log).
+static int s_bad_chars;
+
+// 7E1: seven data bits, an even-parity bit, one marking (LOW) stop bit. A
+// character that fails either check is emitted as '?' -- the reply keeps its
+// shape, but a '?' can never parse as part of a number, so both the measurement
+// path below and the app behind the console see a corrupt reply and ask again.
 static int sdi_decode(int ns, char *out, int max) {
     int n = 0, i = 0;
+    s_bad_chars = 0;
     while (n < max - 1) {
         while (i < ns && s_os[i] != 0) i++;   // skip HIGH
         while (i < ns && s_os[i] == 0) i++;   // skip LOW idle -> first HIGH = start
         if (i >= ns) break;
         int start = i;
-        uint8_t c = 0; int bad = 0;
+        uint8_t c = 0; int ones = 0;
+        // Bit k of the frame is centred at start + k*8 + 4; data bits are k = 1..7,
+        // parity k = 8, stop k = 9. A frame cut by the window is dropped whole.
+        int stop_idx = start + SDI_OS_BIT * 9 + SDI_OS_BIT / 2;
+        if (stop_idx >= ns) break;
         for (int b = 0; b < 7; b++) {
-            int idx = start + SDI_OS_BIT * b + SDI_OS_BIT + SDI_OS_BIT / 2;
-            if (idx >= ns) { bad = 1; break; }
-            if (s_os[idx] == 0) c |= (uint8_t)(1u << b);   // LOW = logic 1
+            int idx = start + SDI_OS_BIT * (b + 1) + SDI_OS_BIT / 2;
+            if (s_os[idx] == 0) { c |= (uint8_t)(1u << b); ones++; }   // LOW = logic 1
         }
-        if (bad) break;
+        int parity_one = (s_os[start + SDI_OS_BIT * 8 + SDI_OS_BIT / 2] == 0);
+        int stop_marking = (s_os[stop_idx] == 0);
         char ch = (char)(c & 0x7F);
+        if (((ones + parity_one) & 1) || !stop_marking) { ch = '?'; s_bad_chars++; }
         if (ch != '\r' && ch != '\n') out[n++] = ch;   // strip CRLF for parsing
         i = start + 10 * SDI_OS_BIT - SDI_OS_BIT / 2;
     }
@@ -87,14 +106,21 @@ static int sdi12_transact(uint8_t gpio, const char *cmd, char *reply, size_t cap
                           uint32_t win_ms) {
     if (cap < 2) return 0;
     LOG_DEBUG("SDI12 GP%u -> \"%s\" (win %lu ms)\n", gpio, cmd, (unsigned long) win_ms);
+    // Interrupts off from the break to the end of the capture (<= ~0.7 s): the
+    // bit timing on both directions is busy-waited and cannot afford the BLE
+    // background IRQ in the middle of a bit. The link layer lives in the radio
+    // chip and keeps the connection alive on its own; the host catches up after.
+    uint32_t irq = save_and_disable_interrupts();
     sdi_send(gpio, cmd);
     int ns = sdi_capture(gpio, win_ms);
+    restore_interrupts(irq);
     int n = sdi_decode(ns, reply, (int) cap);
     if (n <= 0) {
         LOG_DEBUG("SDI12 GP%u <- (sin datos; linea %s en reposo)\n", gpio,
                   gpio_get(gpio) ? "ALTA (rara)" : "baja (normal)");
         return n;
     }
+    if (s_bad_chars) LOG_WARN("SDI12 GP%u: %d caracteres con paridad/framing malos\n", gpio, s_bad_chars);
     // Printable copy (non-ASCII -> '.') + first bytes in hex on a second line.
     char vis[41];
     int vn = n < 40 ? n : 40;
@@ -119,6 +145,10 @@ static sdi12_console_result_t s_console;
 void sdi12_console_run(uint8_t gpio, const char *cmd) {
     strncpy(s_console.cmd, cmd, sizeof s_console.cmd - 1);
     s_console.cmd[sizeof s_console.cmd - 1] = '\0';
+    // The app has just written this command and is reading back the previous
+    // result: let those notifications leave before interrupts go quiet for the
+    // exchange, or the phone waits the whole capture for its acknowledgement.
+    sleep_ms(120);
     char reply[SDI12_LINE_MAX];
     int n = sdi12_transact(gpio, cmd, reply, sizeof reply, 800);
     strncpy(s_console.lines[0], n > 0 ? reply : "(sin respuesta)", SDI12_LINE_MAX - 1);
@@ -140,11 +170,25 @@ void sensor_init(const station_config_t *cfg) {
     adc_init();
 }
 
+// One exchange whose reply must be clean: a '?' means a character failed parity
+// or framing, so ask once more. The probe re-sends a D reply on request and a
+// repeated M! simply restarts its (two-second) measurement.
+static int sdi12_transact_clean(uint8_t gpio, const char *cmd, char *reply, size_t cap,
+                                uint32_t win_ms) {
+    int n = sdi12_transact(gpio, cmd, reply, cap, win_ms);
+    if (n > 0 && strchr(reply, '?')) {
+        LOG_WARN("sdi12: respuesta corrupta a %s en GP%u, reintento\n", cmd, gpio);
+        sleep_ms(50);
+        n = sdi12_transact(gpio, cmd, reply, cap, win_ms);
+    }
+    return n;
+}
+
 // Full SDI-12 measurement: aM! -> "atttn" -> wait ttt s -> aD0..Dk until n values.
 static int sdi12_measure_values(uint8_t gpio, char addr, float *vals, int max) {
     char cmd[8], reply[SDI12_LINE_MAX];
     snprintf(cmd, sizeof cmd, "%cM!", addr);
-    if (sdi12_transact(gpio, cmd, reply, sizeof reply, 500) < 5) return -1;
+    if (sdi12_transact_clean(gpio, cmd, reply, sizeof reply, 500) < 5) return -1;
     int delay_s = 0, nvals = 0;
     if (!sdi12_parse_measure_hdr(reply, &delay_s, &nvals)) return -1;
     if (nvals > max) nvals = max;
@@ -153,7 +197,7 @@ static int sdi12_measure_values(uint8_t gpio, char addr, float *vals, int max) {
     int got = 0;
     for (int d = 0; d <= 9 && got < nvals; d++) {
         snprintf(cmd, sizeof cmd, "%cD%d!", addr, d);
-        if (sdi12_transact(gpio, cmd, reply, sizeof reply, 600) <= 1) break;
+        if (sdi12_transact_clean(gpio, cmd, reply, sizeof reply, 600) <= 1) break;
         int before = got;
         got = sdi12_parse_values(reply, vals, got, nvals);
         if (got == before) break;             // empty D reply -> probe is done
