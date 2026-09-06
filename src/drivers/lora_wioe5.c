@@ -4,6 +4,7 @@
 #include "savia/clock.h"
 #include "savia/storage.h"
 #include "savia/log.h"
+#include "savia/pinmap.h"      // SAVIA_GPIO_COUNT: refuse to open on unassigned pins
 
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
@@ -249,6 +250,14 @@ static bool lora_join(void) {
 // Bring the UART up on tx/rx and configure the module (no join). Idempotent:
 // re-opens if the pins changed. Sets s_ready.
 static bool lora_open(uint8_t tx, uint8_t rx) {
+    // No pins assigned (a fresh board, or LoRa switched off from the app): there is
+    // nothing to open -- and gpio_set_function(0xFF) would write past the GPIO
+    // register block, since release builds skip the SDK's parameter checks.
+    if (tx >= SAVIA_GPIO_COUNT || rx >= SAVIA_GPIO_COUNT) {
+        s_ready = false;
+        LOG_WARN("LoRa: no UART pins assigned (tx=%u rx=%u), module not opened\n", tx, rx);
+        return false;
+    }
     s_uart = uart_for_tx(tx);
     uart_init(s_uart, LORA_BAUD);
     uart_set_format(s_uart, 8, 1, UART_PARITY_NONE);
@@ -477,10 +486,7 @@ bool lora_init(const station_config_t *cfg) {
 }
 
 bool lora_cycle(const station_config_t *cfg) {
-    if (!s_ready || !cfg) {
-        LOG_INFO("LoRa: cycle skip (ready=%d cfg=%d)\n", (int) s_ready, cfg != NULL);
-        return false;
-    }
+    if (!cfg) return false;
     uint32_t up = to_ms_since_boot(get_absolute_time());
 
     // Clamp the app-set period so a bad/zero config can't spam the network.
@@ -494,6 +500,15 @@ bool lora_cycle(const station_config_t *cfg) {
     s_last_attempt_ms = up;
     LOG_INFO("LoRa: cycle due (period=%us)\n", (unsigned) period_s);
 
+    // Not open yet (enabled from the app after boot, module silent at boot) or
+    // moved to other pins: (re)open here, at most once per period.
+    if (!s_ready || s_tx != cfg->lora_uart_tx_gpio || s_rx != cfg->lora_uart_rx_gpio) {
+        if (!lora_open(cfg->lora_uart_tx_gpio, cfg->lora_uart_rx_gpio)) {
+            LOG_WARN("LoRa: module silent, retry next period\n");
+            return false;
+        }
+        s_joined = false;   // new UART session: join again
+    }
     if (!s_joined) {                       // retry the OTAA join (e.g. after a drop)
         s_joined = lora_join();
         if (!s_joined) { LOG_WARN("LoRa: join failed, retry next period\n"); return false; }
@@ -633,7 +648,12 @@ void lora_at(uint8_t tx_gpio, uint8_t rx_gpio, const char *cmd) {
             s_at.count = 1;
         }
     } else {
-        strncpy(s_at.lines[0], "(modulo sin respuesta)", LORA_AT_LINE_MAX - 1);
+        // Tell the technician which of the two it is: no module answering, or no
+        // pins to talk on because LoRa is switched off in the configuration.
+        bool unassigned = tx_gpio >= SAVIA_GPIO_COUNT || rx_gpio >= SAVIA_GPIO_COUNT;
+        strncpy(s_at.lines[0],
+                unassigned ? "(LoRa apagado: activalo en Conectividad)" : "(modulo sin respuesta)",
+                LORA_AT_LINE_MAX - 1);
         s_at.lines[0][LORA_AT_LINE_MAX - 1] = '\0';
         s_at.count = 1;
     }

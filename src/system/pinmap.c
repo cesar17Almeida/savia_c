@@ -57,7 +57,11 @@ void pinmap_build(const station_config_t *cfg, savia_pin_info_t out[SAVIA_GPIO_C
         out[cfg->wake_button_gpio].state  = SAVIA_PIN_RESERVED;
         out[cfg->wake_button_gpio].reason = SAVIA_PIN_REASON_WAKE_BTN;
     }
-    if (cfg->lora_enabled) {
+    // The LoRa module keeps its pins while they are assigned, enabled or not: the
+    // Wio-E5 is still soldered to them when the radio is merely switched off, and
+    // a sensor bit-banging GP17 against the module's TX driver is a short circuit.
+    // Unassigned pins (SAVIA_GPIO_NONE, a fresh board) reserve nothing.
+    {
         uint8_t lp[2] = { cfg->lora_uart_tx_gpio, cfg->lora_uart_rx_gpio };
         for (int i = 0; i < 2; i++) {
             if (lp[i] < SAVIA_GPIO_COUNT && out[lp[i]].state == SAVIA_PIN_FREE) {
@@ -90,8 +94,8 @@ savia_pin_assign_t pinmap_check_assign(const station_config_t *cfg, uint8_t gpio
     if (is_wireless_pin(gpio)) return SAVIA_PIN_ASSIGN_RESERVED;
     if (!cfg) return SAVIA_PIN_ASSIGN_OK;
     if (gpio == cfg->wake_button_gpio) return SAVIA_PIN_ASSIGN_RESERVED;
-    if (cfg->lora_enabled &&
-        (gpio == cfg->lora_uart_tx_gpio || gpio == cfg->lora_uart_rx_gpio)) {
+    // Assigned LoRa pins are taken whether or not the radio is on (see pinmap_build).
+    if (gpio == cfg->lora_uart_tx_gpio || gpio == cfg->lora_uart_rx_gpio) {
         return SAVIA_PIN_ASSIGN_RESERVED;
     }
     for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) {
@@ -138,6 +142,24 @@ savia_pin_assign_t pinmap_check_sensors(const station_config_t *base,
         }
     }
     return SAVIA_PIN_ASSIGN_OK;
+}
+
+// UART instance a pin muxes to (RP2040/RP2350): GP0-1, 12-13, 16-17, 28-29 -> uart0.
+static int uart_index(uint8_t gpio) {
+    int quad = (gpio / 4) & 3;
+    return (quad == 0 || quad == 3) ? 0 : 1;
+}
+
+savia_pin_assign_t pinmap_check_uart_pair(const station_config_t *base, uint8_t tx, uint8_t rx) {
+    if (tx >= SAVIA_GPIO_COUNT || rx >= SAVIA_GPIO_COUNT) return SAVIA_PIN_ASSIGN_OUT_OF_RANGE;
+    if (tx % 4 != 0 || rx % 4 != 1 || uart_index(tx) != uart_index(rx)) return SAVIA_PIN_ASSIGN_INCAPABLE;
+    // Lift LoRa's own claim so moving the module off its current pins is not a self-collision.
+    station_config_t scratch = *base;
+    scratch.lora_enabled = false;
+    scratch.lora_uart_tx_gpio = SAVIA_GPIO_NONE;
+    scratch.lora_uart_rx_gpio = SAVIA_GPIO_NONE;
+    savia_pin_assign_t r = pinmap_check_assign(&scratch, tx, SAVIA_PIN_CAP_UART, -1);
+    return r != SAVIA_PIN_ASSIGN_OK ? r : pinmap_check_assign(&scratch, rx, SAVIA_PIN_CAP_UART, -1);
 }
 
 const char *pinmap_assign_str(savia_pin_assign_t r) {

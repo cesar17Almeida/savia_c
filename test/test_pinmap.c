@@ -10,7 +10,7 @@
 
 int main(void) {
     station_config_t cfg;
-    config_load_defaults(&cfg);   // no sensors, wake on GP15, LoRa OFF (GP4/5)
+    config_load_defaults(&cfg);   // no sensors, wake on GP15, LoRa OFF (no pins)
     // Defaults ship an empty sensor table, so place the probe the rest of this
     // test reasons about (slot 0 -> port 1) instead of inheriting it.
     cfg.sensors[0].type = SENSOR_SDI12_AQUACHECK;
@@ -59,15 +59,27 @@ int main(void) {
     assert(pinmap_check_assign(&cfg, 26, SAVIA_PIN_CAP_ADC, -1) == SAVIA_PIN_ASSIGN_OK);
 
     // --- enabling LoRa reserves its UART pins ---
-    cfg.lora_enabled = true;   // tx=GP16, rx=GP17 by default (UART0, field wiring)
+    cfg.lora_enabled = true;   // the app wires the Wio-E5 on UART0 GP16/GP17
+    cfg.lora_uart_tx_gpio = 16; cfg.lora_uart_rx_gpio = 17;
     pinmap_build(&cfg, pins);
     assert(pins[16].state == SAVIA_PIN_RESERVED &&
            pins[16].reason == SAVIA_PIN_REASON_LORA_UART);
     assert(pins[17].state == SAVIA_PIN_RESERVED);
     assert(pinmap_check_assign(&cfg, 16, pio, -1) == SAVIA_PIN_ASSIGN_RESERVED);
 
+    // --- switching the radio off keeps its wired pins: the module is still
+    //     soldered there. Only unassigning the pins frees them. ---
+    cfg.lora_enabled = false;
+    pinmap_build(&cfg, pins);
+    assert(pins[16].state == SAVIA_PIN_RESERVED &&
+           pins[16].reason == SAVIA_PIN_REASON_LORA_UART);
+    assert(pinmap_check_assign(&cfg, 17, pio, -1) == SAVIA_PIN_ASSIGN_RESERVED);
+    assert(pinmap_check_uart_pair(&cfg, 16, 17) == SAVIA_PIN_ASSIGN_OK);   // its own pins, never a self-collision
+    cfg.lora_uart_tx_gpio = SAVIA_GPIO_NONE; cfg.lora_uart_rx_gpio = SAVIA_GPIO_NONE;   // unplugged
+    pinmap_build(&cfg, pins);
+    assert(pins[16].state == SAVIA_PIN_FREE && pins[17].state == SAVIA_PIN_FREE);
+
     // --- atomic multi-sensor validation (the sensors[] write-path gate) ---
-    cfg.lora_enabled = false;   // back to GP16/17 free for these cases
     {
         savia_sensor_slot_t set[SAVIA_MAX_SENSORS] = {0};
         set[0].type = SENSOR_SDI12_GENERIC; set[0].gpio = 6;     // PIO ok
@@ -143,5 +155,22 @@ int main(void) {
     assert(sensor_type_extra(SENSOR_SDI12_AQUACHECK) == 0);             // fixed layout
 
     printf("test_pinmap: OK (caps + state + assignment + atomic sensors[] + gpio2 + catalog)\n");
+    // --- LoRa UART pair validator ---
+    assert(pinmap_check_uart_pair(&cfg, 16, 17) == SAVIA_PIN_ASSIGN_OK);          // uart0 pair, free
+    assert(pinmap_check_uart_pair(&cfg, 0, 17)  == SAVIA_PIN_ASSIGN_OK);          // cross pair, same uart0
+    assert(pinmap_check_uart_pair(&cfg, 4, 17)  == SAVIA_PIN_ASSIGN_INCAPABLE);   // uart1 TX with uart0 RX
+    assert(pinmap_check_uart_pair(&cfg, 17, 16) == SAVIA_PIN_ASSIGN_INCAPABLE);   // roles swapped
+    assert(pinmap_check_uart_pair(&cfg, 12, 15) == SAVIA_PIN_ASSIGN_INCAPABLE);   // GP15 is not a UART RX
+    assert(pinmap_check_uart_pair(&cfg, 28, 29) == SAVIA_PIN_ASSIGN_RESERVED);    // GP29 belongs to the radio
+    assert(pinmap_check_uart_pair(&cfg, 0, 1)   == SAVIA_PIN_ASSIGN_OK);
+    cfg.sensors[1].type = SENSOR_ONEWIRE_DS18B20; cfg.sensors[1].gpio = 1;
+    assert(pinmap_check_uart_pair(&cfg, 0, 1)   == SAVIA_PIN_ASSIGN_OCCUPIED);    // a sensor sits on GP1
+    cfg.sensors[1].type = SENSOR_NONE;
+    cfg.lora_enabled = true; cfg.lora_uart_tx_gpio = 16; cfg.lora_uart_rx_gpio = 17;
+    assert(pinmap_check_uart_pair(&cfg, 16, 17) == SAVIA_PIN_ASSIGN_OK);          // keeping its own pins is fine
+    assert(pinmap_check_uart_pair(&cfg, 20, 21) == SAVIA_PIN_ASSIGN_OK);          // moving to uart1
+    assert(pinmap_check_uart_pair(&cfg, 40, 41) == SAVIA_PIN_ASSIGN_OUT_OF_RANGE);
+    cfg.lora_enabled = false;
+
     return 0;
 }

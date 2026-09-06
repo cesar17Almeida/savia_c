@@ -430,6 +430,19 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
                 ok = false; err = "lora_period_s out of range";
             } else next.lora_period_s = cp.lora_period_s;
         }
+        if (ok && cp.has_lora_enabled) next.lora_enabled = cp.lora_enabled;
+        if (ok && cp.has_lora_tx) next.lora_uart_tx_gpio = cp.lora_tx;
+        if (ok && cp.has_lora_rx) next.lora_uart_rx_gpio = cp.lora_rx;
+        if (ok && next.lora_enabled && (cp.has_lora_enabled || cp.has_lora_tx || cp.has_lora_rx)) {
+            // Enabling or moving the module: its pins must be a free UART pair.
+            savia_pin_assign_t r = pinmap_check_uart_pair(g_cfg, next.lora_uart_tx_gpio,
+                                                          next.lora_uart_rx_gpio);
+            if (r != SAVIA_PIN_ASSIGN_OK) {
+                static char lerr[40];
+                snprintf(lerr, sizeof lerr, "lora: %s", pinmap_assign_str(r));
+                ok = false; err = lerr;
+            }
+        }
         if (ok && cp.has_inference_mode) {
             if (cp.inference_mode == SAVIA_INFER_LOCAL && !inference_on_device()) {
                 ok = false; err = "no_local_inference";   // app gates on infer_dev
@@ -557,13 +570,15 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
                                              offset, buffer, buffer_size);
     }
     if (att_handle == H_STATUS) {
-        uint8_t tmp[256];   // +lora{} block +now_ms/utc_offset_min
+        uint8_t tmp[384];   // ~220 B base + 17 B per actuator slot
         uint64_t up_ms = to_ms_since_boot(get_absolute_time());
         uint32_t up_s = (uint32_t)(up_ms / 1000);
         lora_status_t ls; lora_get_status(&ls);
         uint64_t now_ms = clock_is_set() ? clock_now(up_ms) : 0;
+        // A pending (not yet flashed) write already makes the board non-factory.
+        bool factory = config_store_is_factory() && !g_config_dirty;
         size_t n = ble_serialize_status(g_cfg, up_s, now_ms, clock_last_sync_ms(),
-                                        g_weather_updated_ms, &ls, tmp, sizeof(tmp));
+                                        g_weather_updated_ms, &ls, factory, tmp, sizeof(tmp));
         return att_read_callback_handle_blob(tmp, n, offset, buffer, buffer_size);
     }
     if (att_handle == H_CONFIG) {

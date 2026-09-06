@@ -170,5 +170,10 @@ void config_load_defaults(station_config_t *cfg);
 // record was restored into cfg; save() writes cfg to the last flash sector.
 bool config_store_load(station_config_t *cfg);
 void config_store_save(const station_config_t *cfg);
+// Wipe the saved record: the next boot starts from defaults (factory reset).
+void config_store_erase(void);
+// True while the station runs compiled defaults that were never saved: a
+// fresh board, reported in `status` so the app can offer its setup wizard.
+bool config_store_is_factory(void);
 
 #endif // SAVIA_CONFIG_H

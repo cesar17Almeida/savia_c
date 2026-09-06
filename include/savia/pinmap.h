@@ -38,7 +38,7 @@ typedef enum {
     SAVIA_PIN_REASON_SENSOR,      // a sensor slot lives here (see `port`)
     SAVIA_PIN_REASON_WIRELESS,    // CYW43439 (GP23/24/25/29) -- gives us BLE
     SAVIA_PIN_REASON_WAKE_BTN,    // deep-sleep wake button
-    SAVIA_PIN_REASON_LORA_UART,   // Wio-E5 TX/RX (only when LoRa is enabled)
+    SAVIA_PIN_REASON_LORA_UART,   // Wio-E5 TX/RX (while assigned, radio on or off)
 } savia_pin_reason_t;
 
 // Result of validating a candidate assignment.
@@ -85,6 +85,11 @@ savia_pin_assign_t pinmap_check_assign(const station_config_t *cfg, uint8_t gpio
 savia_pin_assign_t pinmap_check_sensors(const station_config_t *base,
                                         const savia_sensor_slot_t *slots,
                                         int *bad_index);
+
+// Can the LoRa module sit on tx/rx? Both must be free for LoRa (its own current
+// pins don't count as taken) and form a valid UART pair: TX on GP4n, RX on
+// GP4n+1, same UART instance. Pure, like the sensor checks.
+savia_pin_assign_t pinmap_check_uart_pair(const station_config_t *base, uint8_t tx, uint8_t rx);
 
 // Short token for an assign result (for the config_err ack message).
 const char *pinmap_assign_str(savia_pin_assign_t r);

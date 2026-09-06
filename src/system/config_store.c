@@ -37,6 +37,9 @@ _Static_assert(sizeof(cfg_record_t) <= FLASH_SECTOR_SIZE, "cfg_record_t exceeds 
 // Bytes actually programmed: the record rounded up to a whole number of 256 B pages.
 #define CFG_PROG_LEN (((sizeof(cfg_record_t) + FLASH_PAGE_SIZE - 1) / FLASH_PAGE_SIZE) * FLASH_PAGE_SIZE)
 
+// Flips to false once a valid record is loaded or written (see config.h).
+static bool s_factory = true;
+
 static uint32_t crc32(const uint8_t *p, size_t n) {
     uint32_t c = 0xffffffffu;
     for (size_t i = 0; i < n; i++) {
@@ -67,8 +70,11 @@ bool config_store_load(station_config_t *cfg) {
         return false;
     }
     memcpy(cfg, &rec->cfg, sizeof(*cfg));
+    s_factory = false;
     return true;
 }
+
+bool config_store_is_factory(void) { return s_factory; }
 
 // Runs with interrupts disabled (via flash_safe_execute): no logging here.
 static void do_save(void *param) {
@@ -88,4 +94,16 @@ void config_store_save(const station_config_t *cfg) {
     int rc = flash_safe_execute(do_save, (void *) cfg, 2000);
     if (rc != PICO_OK) LOG_WARN("config_store: flash save rc=%d\n", rc);
     else               LOG_INFO("config_store: saved (sleep_s=%u)\n", (unsigned) cfg->sleep_seconds);
+    s_factory = false;
+}
+
+static void do_erase(void *param) {
+    (void) param;
+    flash_range_erase(CFG_OFFSET, FLASH_SECTOR_SIZE);
+}
+
+void config_store_erase(void) {
+    int rc = flash_safe_execute(do_erase, NULL, 2000);
+    if (rc != PICO_OK) LOG_WARN("config_store: flash erase rc=%d\n", rc);
+    s_factory = true;
 }

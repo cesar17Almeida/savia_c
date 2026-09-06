@@ -293,12 +293,13 @@ size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
 size_t ble_serialize_status(const station_config_t *cfg,
                             uint32_t uptime_s, uint64_t now_ms, uint64_t last_sync_ms,
                             uint64_t weather_updated_ms, const lora_status_t *lora,
-                            uint8_t *out, size_t cap) {
+                            bool factory, uint8_t *out, size_t cap) {
     cbor_writer_t w;
     cbor_w_init(&w, out, cap);
-    cbor_w_map(&w, 10);
+    cbor_w_map(&w, 11);
     cbor_w_textz(&w, "v");        cbor_w_uint(&w, SAVIA_PROTOCOL_VERSION);
     cbor_w_textz(&w, "fw");       cbor_w_textz(&w, SAVIA_FW_VERSION);
+    cbor_w_textz(&w, "factory");  cbor_w_bool(&w, factory);   // fresh board, nothing saved yet
     cbor_w_textz(&w, "mode");
     cbor_w_textz(&w, cfg && cfg->inference_mode == SAVIA_INFER_LOCAL ? "local" : "forward");
     // Device wall clock (epoch ms, null until first sync) + configured UTC offset,
@@ -452,7 +453,7 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
                             uint8_t *out, size_t cap) {
     cbor_writer_t w;
     cbor_w_init(&w, out, cap);
-    cbor_w_map(&w, 18);
+    cbor_w_map(&w, 21);
 
     cbor_w_textz(&w, "v"); cbor_w_uint(&w, SAVIA_PROTOCOL_VERSION);
 
@@ -473,6 +474,12 @@ size_t ble_serialize_config(const savia_device_id_t *dev,
     cbor_w_textz(&w, "log_level");  cbor_w_uint(&w, cfg->log_level);
     cbor_w_textz(&w, "wake_gpio");  cbor_w_uint(&w, cfg->wake_button_gpio);
     cbor_w_textz(&w, "lora_period_s"); cbor_w_uint(&w, cfg->lora_period_s);
+    // LoRa module: enabled + UART pins (null while unassigned on a fresh board).
+    cbor_w_textz(&w, "lora"); cbor_w_bool(&w, cfg->lora_enabled);
+    cbor_w_textz(&w, "lora_tx");
+    if (cfg->lora_uart_tx_gpio < SAVIA_GPIO_NONE) cbor_w_uint(&w, cfg->lora_uart_tx_gpio); else cbor_w_null(&w);
+    cbor_w_textz(&w, "lora_rx");
+    if (cfg->lora_uart_rx_gpio < SAVIA_GPIO_NONE) cbor_w_uint(&w, cfg->lora_uart_rx_gpio); else cbor_w_null(&w);
     cbor_w_textz(&w, "inference_mode");
     cbor_w_textz(&w, cfg->inference_mode == SAVIA_INFER_LOCAL ? "local" : "forward");
     cbor_w_textz(&w, "infer_dev");  cbor_w_bool(&w, infer_dev);   // build capability (RO)
@@ -741,6 +748,20 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
             if (!cbor_r_null(&r)) {
                 uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
                 out->lora_period_s = (uint32_t) v; out->has_lora_period_s = true;
+            }
+        } else if (cbor_text_eq(k, kn, "lora")) {
+            bool b;
+            if (cbor_r_bool(&r, &b)) { out->lora_enabled = b; out->has_lora_enabled = true; }
+            else if (!cbor_r_skip(&r)) return false;
+        } else if (cbor_text_eq(k, kn, "lora_tx")) {
+            if (!cbor_r_null(&r)) {
+                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                out->lora_tx = (uint8_t) v; out->has_lora_tx = true;
+            }
+        } else if (cbor_text_eq(k, kn, "lora_rx")) {
+            if (!cbor_r_null(&r)) {
+                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                out->lora_rx = (uint8_t) v; out->has_lora_rx = true;
             }
         } else if (cbor_text_eq(k, kn, "inference_mode")) {
             if (!cbor_r_null(&r)) {

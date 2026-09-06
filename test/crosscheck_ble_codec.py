@@ -86,10 +86,11 @@ def check():
 
     # 5) status (incl. the LoRa link block + mode/actuators)
     st = load("status")
-    assert set(st.keys()) == {"v", "fw", "mode", "act",
+    assert set(st.keys()) == {"v", "fw", "factory", "mode", "act",
                               "now_ms", "utc_offset_min",
                               "uptime_s", "last_sync_ms", "weather_updated_ms", "lora"}
     assert st["v"] == 1 and st["fw"] == "0.1.0-c" and st["uptime_s"] == 12345
+    assert st["factory"] is True   # the C test serializes a never-saved config
     assert st["mode"] == "forward"
     assert st["act"] == []   # default config has no actuator slots
     assert st["now_ms"] == 1700000012345 and st["utc_offset_min"] == 0
@@ -110,12 +111,14 @@ def check():
     cfg = load("config")
     assert set(cfg.keys()) == {"v", "device", "name", "sleep_s", "deep_sleep", "capture_s",
                                "daily_hour", "daily_min", "mock", "log_level", "wake_gpio", "lora_period_s",
+                               "lora", "lora_tx", "lora_rx",
                                "inference_mode", "infer_dev", "utc_offset_min",
                                "lat", "lon", "sensors"}
     assert cfg["v"] == 1 and cfg["name"] == "Savia" and cfg["sleep_s"] == 3600 and cfg["wake_gpio"] == 15
     assert cfg["deep_sleep"] is False   # default OFF
     assert cfg["capture_s"] == 3600 and cfg["daily_hour"] == 20 and cfg["daily_min"] == 0
     assert cfg["lora_period_s"] == 3600   # default 1 h LoRa cycle
+    assert cfg["lora"] is False and cfg["lora_tx"] is None and cfg["lora_rx"] is None   # off out of the box
     assert cfg["mock"] is False and cfg["log_level"] == 1   # mock OFF by default (client-only)
     # v7: runtime mode + local-time schedule + coords (the C test sets Valencia).
     assert cfg["inference_mode"] == "forward" and cfg["infer_dev"] is False

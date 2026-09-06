@@ -27,8 +27,8 @@ int main(void) {
     // Every slot zeroed; LoRa off by default, pins on the field wiring (UART0).
     assert(cfg.sensors[0].type == SENSOR_NONE);
     assert(cfg.sensors[1].type == SENSOR_NONE);
-    assert(cfg.lora_enabled == true);   // on by default: boot uplink = time source
-    assert(cfg.lora_uart_tx_gpio == 16 && cfg.lora_uart_rx_gpio == 17);
+    assert(cfg.lora_enabled == false);  // off out of the box: the installer wires it from the app
+    assert(cfg.lora_uart_tx_gpio == SAVIA_GPIO_NONE && cfg.lora_uart_rx_gpio == SAVIA_GPIO_NONE);
     assert(cfg.lora_period_s == 3600);      // 1 h default LoRa cycle
     assert(cfg.lora_last_signal_ms == 0);   // no signal persisted yet
 

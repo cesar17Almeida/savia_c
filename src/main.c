@@ -247,7 +247,7 @@ int main(void) {
     if (!wake.resumed && power_reset_button_held(&cfg, SAVIA_FACTORY_RESET_HOLD_MS)) {
         LOG_WARN("button held at boot -> factory reset (clearing password + config)\n");
         config_load_defaults(&cfg);
-        config_store_save(&cfg);
+        config_store_erase();
         savia_log_set_level(cfg.log_level);
     }
 

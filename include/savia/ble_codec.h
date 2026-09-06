@@ -21,10 +21,11 @@ size_t ble_serialize_aggregations(const savia_aggregate_t *rows, size_t n,
                                   uint8_t *out, size_t cap); // [{hour_ms,port,kind,count,mean,min,max,depth_cm}]
 size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
                                  uint8_t *out, size_t cap);  // [{ts_ms,model,kind,port,value,confidence}]
+// `factory` = running never-saved defaults (a fresh board; see config_store_is_factory).
 size_t ble_serialize_status(const station_config_t *cfg,
                             uint32_t uptime_s, uint64_t now_ms, uint64_t last_sync_ms,
                             uint64_t weather_updated_ms, const lora_status_t *lora,
-                            uint8_t *out, size_t cap);
+                            bool factory, uint8_t *out, size_t cap);
 size_t ble_serialize_count(uint64_t count, uint8_t *out, size_t cap);  // {count:N}
 
 // Parsers for the write characteristics.
@@ -100,6 +101,10 @@ typedef struct {
     bool     has_mock;        bool     mock;
     bool     has_log_level;   uint8_t  log_level;
     bool     has_lora_period_s; uint32_t lora_period_s;
+    // LoRa module: enable flag + UART pins (validated as a free pair on enable).
+    bool     has_lora_enabled; bool     lora_enabled;
+    bool     has_lora_tx;     uint8_t  lora_tx;
+    bool     has_lora_rx;     uint8_t  lora_rx;
     bool     has_inference_mode; uint8_t inference_mode;   // savia_inference_mode_t
     bool     has_utc_offset;  int16_t  utc_offset_min;
     // Coords: number sets, null clears. Both must travel together to SET; either
