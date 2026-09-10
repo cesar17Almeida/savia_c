@@ -5,7 +5,7 @@
 #include <stdarg.h>
 #include <string.h>
 
-#define LOG_RING_LINES 24
+#define LOG_RING_LINES 48      // ~4 KB; the app polls every few seconds and stitches windows
 #define LOG_LINE_LEN   80
 
 static char     s_ring[LOG_RING_LINES][LOG_LINE_LEN];
@@ -39,7 +39,7 @@ static int stamp_prefix(char *out, size_t cap) {
     return n > 0 ? n : 0;
 }
 
-static void ring_push(const char *line) {
+static void ring_push(const char *line, int level) {
     size_t n = strlen(line);
     while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) n--;  // strip EOL
     char *dst = s_ring[s_head];
@@ -51,6 +51,10 @@ static void ring_push(const char *line) {
         memcpy(dst, ts, (size_t) tn);
         pos = (size_t) tn;
     }
+    if (level >= SAVIA_LOG_WARN && pos + 2 < LOG_LINE_LEN - 1) {   // warning marker
+        memcpy(dst + pos, "! ", 2);
+        pos += 2;
+    }
     size_t avail = LOG_LINE_LEN - 1 - pos;
     if (n > avail) n = avail;
     memcpy(dst + pos, line, n);
@@ -60,15 +64,26 @@ static void ring_push(const char *line) {
     if (s_count < LOG_RING_LINES) s_count++;
 }
 
-void savia_log_write(const char *fmt, ...) {
+static void write_v(int level, const char *fmt, va_list ap) {
     char buf[LOG_LINE_LEN];
-    va_list ap;
-    va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
     printf("%s", buf);   // serial output, unchanged
     if (s_flush) s_flush();
-    ring_push(buf);
+    ring_push(buf, level);
+}
+
+void savia_log_write_at(int level, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    write_v(level, fmt, ap);
+    va_end(ap);
+}
+
+void savia_log_write(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    write_v(SAVIA_LOG_INFO, fmt, ap);
+    va_end(ap);
 }
 
 void savia_log_hexdump(const char *label, const uint8_t *buf, unsigned len) {
@@ -78,7 +93,7 @@ void savia_log_hexdump(const char *label, const uint8_t *buf, unsigned len) {
         off += snprintf(line + off, sizeof(line) - (size_t) off, " %02x", buf[i]);
     printf("%s\n", line);
     if (s_flush) s_flush();
-    ring_push(line);
+    ring_push(line, SAVIA_LOG_DEBUG);
 }
 
 unsigned savia_log_count(void) { return s_count; }

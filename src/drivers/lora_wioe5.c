@@ -244,6 +244,7 @@ static bool lora_configure(void) {
 static bool lora_join(void) {
     static const char *until[] = { "Network joined", "Joined already", "+JOIN: Done" };
     static const char *fail[]  = { "Join failed", "+JOIN: Failed" };
+    LOG_INFO("LoRa: joining (OTAA)\n");
     return at_exec("AT+JOIN", until, 3, fail, 2, LORA_JOIN_TIMEOUT_MS, NULL, 0) == AT_OK;
 }
 
@@ -363,6 +364,7 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     uint8_t nsoil = 0;
     const bool confirmed = (cfg == NULL);
     bool boot_frame = false;
+    const char *kind = "forecast";     // named in the log so the app can tell frames apart
 
     // Priority: BOOT (once per power cycle) > pending CFG_ACK > dirty coords >
     // mode payload. cfg==NULL (the app's ping) always sends the plain forecast.
@@ -370,15 +372,19 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
         uint32_t lkg_s = (uint32_t) (clock_last_known() / 1000ULL);
         plen = lora_encode_uplink_boot(lkg_s, payload, sizeof payload);
         boot_frame = true;
+        kind = "boot";
     } else if (s_ack_pending) {
+        kind = "cfg_ack";
         plen = lora_encode_uplink_cfg_ack(s_ack_applied, s_ack_rejected,
                                           payload, sizeof payload);
     } else if (cfg && cfg->has_coords &&
                (!s_coords_sent || s_coords_lat != cfg->lat_e7 || s_coords_lon != cfg->lon_e7)) {
+        kind = "coords";
         plen = lora_encode_uplink_coords(cfg->lat_e7, cfg->lon_e7,
                                          cfg->utc_offset_min, payload, sizeof payload);
     } else if (cfg && cfg->inference_mode == SAVIA_INFER_FORWARD &&
                (nsoil = build_soil_recs(now_wall_ms, soil)) > 0) {
+        kind = "soil";
         plen = lora_encode_uplink_soil(soil, nsoil, payload, sizeof payload);
     } else {
         // LOCAL (forecast min) or FORWARD with nothing new: keeps the RX window open.
@@ -388,6 +394,8 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     }
     char tx_hex[2 * LORA_UPLINK_MAX + 1];
     bytes_to_hex(payload, plen, tx_hex);
+    LOG_INFO("LoRa: uplink %s %u B (%s)\n", kind, (unsigned) plen,
+             confirmed ? "confirmed" : "unconfirmed");
 
     static const char *ok[]     = { "OK" };
     static const char *okfail[] = { "ERROR" };
@@ -469,8 +477,8 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     // A pure clock sync (both arrays empty) must NOT wipe the weather cache.
     if (w.n_past || w.n_future)
         weather_set(w.past_ta, w.n_past, w.future_ta, w.n_future, wall_now(now_up));
-    LOG_INFO("LoRa downlink: %u past + %u future TA%s\n",
-             w.n_past, w.n_future, w.has_time ? ", clock set" : "");
+    LOG_INFO("LoRa downlink: %d B, %u past + %u future TA%s\n",
+             dn, w.n_past, w.n_future, w.has_time ? ", clock set" : "");
     return true;
 }
 
@@ -612,6 +620,18 @@ void lora_get_status(lora_status_t *out) {
     out->module[sizeof out->module - 1] = '\0';
 }
 
+// JOIN and the uplink commands answer in two bursts: a couple of lines at once,
+// then silence through the RX1/RX2 windows (~6 s), then the verdict and its tail.
+static bool at_is_slow(const char *cmd) {
+    static const char *const slow[] = { "AT+JOIN", "AT+CMSG", "AT+MSG" };
+    for (size_t i = 0; i < sizeof slow / sizeof *slow; i++) {
+        size_t k = 0;
+        while (slow[i][k] && cmd[k] && toupper((unsigned char) cmd[k]) == slow[i][k]) k++;
+        if (!slow[i][k]) return true;
+    }
+    return false;
+}
+
 // Run a raw AT command and capture its reply lines (idle window between lines, a
 // hard cap for slow commands like JOIN/CMSGHEX, and common terminators). Bumps seq
 // LAST so the app's seq-gate only accepts a fully-written result.
@@ -625,12 +645,17 @@ void lora_at(uint8_t tx_gpio, uint8_t rx_gpio, const char *cmd) {
         uart_puts(s_uart, cmd);
         uart_puts(s_uart, "\r\n");
         LOG_DEBUG("LoRa AT -> %s\n", cmd);
+        // A slow command waits through the RX windows for its verdict; after it only
+        // the tail (NetID/DevAddr, Done) is left, so the short idle gap applies again.
+        const bool slow = at_is_slow(cmd);
+        bool verdict = false;
         char line[LORA_AT_LINE_MAX];
         absolute_time_t hard = make_timeout_time_ms(13000);    // cap for slow cmds
         for (;;) {
             int64_t rem = absolute_time_diff_us(get_absolute_time(), hard);
             if (rem <= 0) break;
-            uint32_t win = rem > 1500000 ? 1500u : (uint32_t)(rem / 1000);  // idle gap
+            uint32_t idle = (slow && !verdict) ? 13000u : 1500u;             // idle gap
+            uint32_t win = rem > (int64_t) idle * 1000 ? idle : (uint32_t)(rem / 1000);
             int n = read_line(line, sizeof line, make_timeout_time_ms(win));
             if (n <= 0) break;                                 // idle / hard cap -> done
             LOG_DEBUG("LoRa AT <- %s\n", line);
@@ -640,7 +665,11 @@ void lora_at(uint8_t tx_gpio, uint8_t rx_gpio, const char *cmd) {
                 s_at.count++;
             }
             if (strstr(line, "OK") || strstr(line, "ERROR") || strstr(line, "Done") ||
-                strstr(line, "joined") || strstr(line, "failed")) break;   // terminators
+                strstr(line, "Please join") || strstr(line, "Not join")) break;   // terminators
+            if (strstr(line, "joined") || strstr(line, "failed")) {
+                if (!slow) break;
+                verdict = true;              // "Network joined": DevAddr and Done still to come
+            }
         }
         if (s_at.count == 0) {
             strncpy(s_at.lines[0], "(sin respuesta)", LORA_AT_LINE_MAX - 1);

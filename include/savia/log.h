@@ -26,8 +26,11 @@ extern "C" {
 extern int savia_log_level;
 void savia_log_set_level(int level);
 
-// Implemented in log.c: printf to serial + append to the ring buffer.
-void savia_log_write(const char *fmt, ...);
+// Implemented in log.c: printf to serial + append to the ring buffer. The level
+// only marks the ring line (WARN lines carry a "! " prefix the app renders as a
+// warning); the serial output is unchanged.
+void savia_log_write_at(int level, const char *fmt, ...);
+void savia_log_write(const char *fmt, ...);       // = INFO
 void savia_log_hexdump(const char *label, const uint8_t *buf, unsigned len);
 
 // Optional time source for log line timestamps, wired from main once the clock
@@ -37,15 +40,16 @@ void savia_log_set_clock(uint64_t (*now_ms)(bool *wall));
 // Optional post-line flush (Pico: stdio_flush) so USB-CDC never drops lines.
 void savia_log_set_flush(void (*flush)(void));
 
-#define LOG_DEBUG(...) do { if (savia_log_level <= SAVIA_LOG_DEBUG) savia_log_write(__VA_ARGS__); } while (0)
-#define LOG_INFO(...)  do { if (savia_log_level <= SAVIA_LOG_INFO)  savia_log_write(__VA_ARGS__); } while (0)
-#define LOG_WARN(...)  do { if (savia_log_level <= SAVIA_LOG_WARN)  savia_log_write(__VA_ARGS__); } while (0)
+#define LOG_DEBUG(...) do { if (savia_log_level <= SAVIA_LOG_DEBUG) savia_log_write_at(SAVIA_LOG_DEBUG, __VA_ARGS__); } while (0)
+#define LOG_INFO(...)  do { if (savia_log_level <= SAVIA_LOG_INFO)  savia_log_write_at(SAVIA_LOG_INFO, __VA_ARGS__); } while (0)
+#define LOG_WARN(...)  do { if (savia_log_level <= SAVIA_LOG_WARN)  savia_log_write_at(SAVIA_LOG_WARN, __VA_ARGS__); } while (0)
 
 // Hex dump of a buffer at DEBUG level (e.g. the raw bytes the phone wrote).
 #define log_hexdump(label, buf, len) \
     do { if (savia_log_level <= SAVIA_LOG_DEBUG) savia_log_hexdump(label, buf, len); } while (0)
 
-// Ring accessors for the BLE log channel (data_request kind="logs").
+// Ring accessors for the BLE log channel (data_request kind="logs"). A line reads
+// "[HH:MM:SS |+Ns ][! ]text": the stamp once a clock is wired, "! " on WARN lines.
 unsigned    savia_log_count(void);          // lines currently retained
 const char *savia_log_line(unsigned i);     // i: 0 = oldest retained .. count-1 = newest
 
