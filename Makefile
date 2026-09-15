@@ -52,7 +52,9 @@ build:
 	  echo "==> el compilador cacheado ya no existe ($$cc): regenerando $(BUILD)"; \
 	  rm -rf $(BUILD); \
 	fi
-	cmake -S . -B $(BUILD) -G Ninja \
+	@# Never echo the cmake line: it carries the TTN AppKey.
+	@echo "cmake -S . -B $(BUILD) -G Ninja -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER) (credenciales OTAA: $(if $(LORA_APP_KEY),.env,placeholders a cero))"
+	@cmake -S . -B $(BUILD) -G Ninja \
 	  -DPICO_SDK_PATH=$(PICO_SDK_PATH) \
 	  $(if $(PICO_TOOLCHAIN_PATH),-DPICO_TOOLCHAIN_PATH=$(PICO_TOOLCHAIN_PATH)) \
 	  -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER) \
