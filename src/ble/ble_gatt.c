@@ -634,8 +634,13 @@ static void dispatch_write(uint16_t att_handle, const uint8_t *buffer, uint16_t 
         if (ble_parse_time_sync(buffer, buffer_size, &ms)) {
             uint64_t outage = 0;
             uint64_t up = to_ms_since_boot(get_absolute_time());
-            bool applied = g_authed ? clock_apply_sync_trusted(ms, up, CLOCK_SRC_BLE, &outage)
-                                    : clock_apply_sync(ms, up, CLOCK_SRC_BLE, &outage);
+            // Trusted when this link proved the password, or when there is none: an open
+            // station lets anyone reconfigure it anyway, and its owner must be able to
+            // repair a clock someone pushed into the future.
+            bool open = !(g_cfg && auth_key_is_set(g_cfg->auth_key));
+            bool applied = (g_authed || open)
+                ? clock_apply_sync_trusted(ms, up, CLOCK_SRC_BLE, &outage)
+                : clock_apply_sync(ms, up, CLOCK_SRC_BLE, &outage);
             if (applied) {
                 LOG_INFO("BLE: time_sync -> %llu ms\n", (unsigned long long) ms);
                 if (outage >= CLOCK_OUTAGE_WARN_MS)
