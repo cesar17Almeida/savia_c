@@ -490,7 +490,7 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
                          (unsigned long long) (outage / 60000ULL));
             break;
         case CLOCK_SYNC_HELD:
-            LOG_WARN("clock: LoRa time %llu is far behind the clock; held until a second downlink agrees\n",
+            LOG_WARN("clock: LoRa time held until another agrees (%llu)\n",
                      (unsigned long long) w.time_ms);
             break;
         case CLOCK_SYNC_REPAIRED:

@@ -203,7 +203,7 @@ int main(void) {
     savia_log_set_flush(log_flush);  // drain USB-CDC per line: no dropped logs
     savia_wdt_feed();
     if (savia_wdt_caused_reboot())
-        LOG_WARN("boot: the watchdog reset the board (the firmware stopped responding)\n");
+        LOG_WARN("boot: reset by the watchdog (the firmware stopped responding)\n");
 
     station_config_t cfg;
     config_load_defaults(&cfg);
@@ -369,7 +369,7 @@ int main(void) {
             cfg_unlock();
             if (stepped) {
                 lora_forget_future_soil(clock_now(savia_uptime_ms()));
-                LOG_WARN("clock: moved back %llu s; %u readings stamped ahead moved or dropped\n",
+                LOG_WARN("clock: moved back %llu s; %u future readings fixed\n",
                          (unsigned long long) (back_ms / 1000u), (unsigned) fixed);
             }
         }
