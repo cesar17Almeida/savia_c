@@ -39,6 +39,11 @@ echo "== 2a) inference input pipeline test (scaler + gather + tensors) =="
 /tmp/savia_test_inference
 
 echo ""
+echo "== 2a2) mock soil replay test (window fill + LSTM hand-off) =="
+"$CC" $CFLAGS test/test_mock_soil.c src/system/mock_soil.c src/storage/storage_flash.c src/system/lstm_input.c src/system/scaler.c src/system/weather.c -o /tmp/savia_test_mock_soil -lm
+/tmp/savia_test_mock_soil
+
+echo ""
 echo "== 2b) scheduler test =="
 "$CC" $CFLAGS test/test_scheduler.c src/power/scheduler.c src/system/config.c src/system/sensor_catalog.c -o /tmp/savia_test_sched
 /tmp/savia_test_sched

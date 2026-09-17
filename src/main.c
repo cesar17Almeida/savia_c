@@ -24,6 +24,7 @@
 #include "savia/sdi12.h"        // probe console (op "sdi12")
 #include "savia/actuator.h"     // actuator slot state (op "act")
 #include "savia/inference.h"
+#include "savia/mock_soil.h"
 #include "savia/weather.h"
 #include "savia/scheduler.h"
 #include "savia/sensor_catalog.h"
@@ -31,46 +32,6 @@
 #include "savia/log.h"
 #include "savia/uptime.h"
 #include "savia/wdt.h"
-
-// Mock dataset baseline (~20 Jun 2026 UTC). Shared by the mock seeding and the
-// boot inference self-test so both anchor to the same window.
-#define MOCK_BASE_MS 1782000000000ULL
-
-// Dev/mock: seed 48 h of hourly readings (HS10, HS30) at boot -- the LSTM's past
-// window -- so the app has a dataset before live sampling accumulates. Also seeds
-// a mock TA forecast into the weather cache (past 48 h + next 24 h) so the
-// on-device LSTM path can build a complete window under mock: HS10/HS30 come from
-// these readings, TA (past + future) from the weather cache.
-//
-// NO air-temperature READING is seeded, deliberately. A station whose only probe
-// is a buried soil sensor has no air thermometer, and readings are attributed by
-// PORT: a mock TA on port 1 shows up in the soil probe's own history as if the
-// probe had measured the air, which it cannot. Air temperature reaches this
-// station as a forecast, so the weather cache below is its only honest home.
-static void seed_mock_readings(void) {
-    const uint64_t base = MOCK_BASE_MS;   // ~20 Jun 2026 UTC (mock baseline), hour-aligned
-    // h = 47..0, NOT 48..1: the newest sample has to land in the base hour itself.
-    // Seeded one hour short, the window's last step would be a LOCF copy and
-    // lstm_gather_inputs would refuse it as stale (LSTM_MAX_STALE_HOURS = 0), which
-    // is exactly what the boot self-test needs NOT to hit.
-    for (int h = 47; h >= 0; h--) {
-        uint64_t ts = base - (uint64_t) h * 3600000ULL;
-        float drift = (float) h * 0.002f;       // older = slightly wetter (dry-down)
-        savia_reading_t r10 = { .ts_ms = ts, .port = 1, .depth_cm = 10,
-                                .kind = READING_SOIL_MOISTURE, .value = 0.70f + drift };
-        savia_reading_t r30 = { .ts_ms = ts, .port = 1, .depth_cm = 30,
-                                .kind = READING_SOIL_MOISTURE, .value = 0.74f + drift };
-        storage_append_reading(&r10);
-        storage_append_reading(&r30);
-    }
-    // Mock TA forecast: past[i] ends at the latest hour, future is the next 24 h.
-    float ta_past[WEATHER_PAST_MAX], ta_future[WEATHER_FUTURE_MAX];
-    for (int i = 0; i < WEATHER_PAST_MAX; i++)
-        ta_past[i] = 20.0f + (float) i * 0.05f;      // oldest -> newest
-    for (int i = 0; i < WEATHER_FUTURE_MAX; i++)
-        ta_future[i] = 22.0f + (float) i * 0.10f;
-    weather_set(ta_past, WEATHER_PAST_MAX, ta_future, WEATHER_FUTURE_MAX, base);
-}
 
 // Serialize cfg access against the BLE write path. In threadsafe-background mode
 // BTstack (incl. handle_config_write's `*g_cfg = next`) runs under the cyw43
@@ -161,6 +122,18 @@ static void capture_slots(const station_config_t *cfg, uint8_t mask, uint64_t no
         }
         cfg_unlock();
     }
+}
+
+// Mock mode: top up the replayed soil window around the current hour. Needs the
+// wall clock, so it is a no-op until the first sync.
+static void mock_top_up(const station_config_t *cfg) {
+    if (!clock_is_set()) return;
+    uint64_t now = clock_now(savia_uptime_ms());
+    cfg_lock();
+    size_t n = mock_soil_fill(now, cfg->utc_offset_min);
+    cfg_unlock();
+    if (n > 2) LOG_INFO("mock: %u replayed soil readings added\n", (unsigned) n);
+    else if (n) LOG_DEBUG("mock: %u replayed soil readings added\n", (unsigned) n);
 }
 
 // After a deep-sleep wake the scheduler is a fresh struct: re-derive each input's
@@ -259,11 +232,11 @@ int main(void) {
     out_slot_t out_slots[SAVIA_MAX_SENSORS] = { 0 };
     sync_output_pins(out_slots, cfg.sensors);
     storage_init();
-    // Bring back the readings the last power cycle had. Before the mock seed on
-    // purpose: a dev board still gets its synthetic window appended on top.
+    // Bring back the readings the last power cycle had.
     storage_store_load();
-    bool mock_seeded = false;
-    if (cfg.mock_enabled) { seed_mock_readings(); mock_seeded = true; }   // dev dataset
+    // Mock mode replays the dataset instead of the probes (filled once the clock is known).
+    bool mock_active = cfg.mock_enabled;
+    if (mock_active) LOG_INFO("mock: soil comes from the dataset replay\n");
     savia_wdt_feed();
     ble_init(&cfg);
     savia_wdt_feed();
@@ -313,16 +286,9 @@ int main(void) {
            inference_on_device(), config_sensor_count(&cfg), cfg.sleep_seconds,
            cfg.capture_interval_s, cfg.daily_hour, cfg.daily_min);
 
-    // On-device inference self-test (dev, mock only): run one LSTM inference over the
-    // seeded 48 h mock window right at boot so the logs show whether TFLM allocates,
-    // Invoke() runs, and how big the arena really is on this board. Independent of
-    // clock/BLE -- the mock data is anchored at MOCK_BASE_MS. Logs go to serial and
-    // the BLE "logs" channel. inference_run_daily is a no-op off-device.
-    if (inference_on_device() && cfg.mock_enabled && !wake.resumed) {
-        LOG_INFO("selftest: running on-device LSTM over the mock window...\n");
-        int rc = inference_run_daily(MOCK_BASE_MS);
-        LOG_INFO("selftest: inference_run_daily rc=%d\n", rc);
-    }
+    // Dev self-test under mock: one LSTM run over the replay's embedded window, so
+    // the logs show that TFLM runs on this board and how far it lands from the host.
+    if (inference_on_device() && mock_active && !wake.resumed) inference_selftest();
 
     savia_scheduler_t sched;
     scheduler_init(&sched);
@@ -365,12 +331,15 @@ int main(void) {
             size_t fixed = 0;
             cfg_lock();
             bool stepped = clock_take_step_back(&back_ms);
-            if (stepped) fixed = storage_rewind_future(clock_now(savia_uptime_ms()), back_ms);
+            // Under mock the replay is rebuilt for the corrected clock (below) instead.
+            if (stepped && mock_active) storage_clear();
+            else if (stepped) fixed = storage_rewind_future(clock_now(savia_uptime_ms()), back_ms);
             cfg_unlock();
             if (stepped) {
                 lora_forget_future_soil(clock_now(savia_uptime_ms()));
                 LOG_WARN("clock: moved back %llu s; %u future readings fixed\n",
                          (unsigned long long) (back_ms / 1000u), (unsigned) fixed);
+                if (mock_active) LOG_INFO("mock: replay rebuilt for the corrected clock\n");
             }
         }
 
@@ -394,33 +363,22 @@ int main(void) {
             ? scheduler_tick(&sched, now_ms, &live)
             : (savia_sched_action_t){ .capture_mask = 0xFF, .daily = false };
 
-        // Sync mock state if the app toggled it (re-seed the dataset on enable).
-        if (live.mock_enabled && !mock_seeded) {
+        // The app switched mock on or off: start from an empty ring either way, so
+        // replayed and measured soil never share a window.
+        if (live.mock_enabled != mock_active) {
             cfg_lock();
-            storage_clear(); seed_mock_readings();
+            storage_clear();
             cfg_unlock();
-            mock_seeded = true;
-        } else if (!live.mock_enabled && mock_seeded) {
-            mock_seeded = false;
+            mock_active = live.mock_enabled;
+            LOG_INFO("mock: %s, stored readings cleared\n", mock_active ? "on" : "off");
         }
 
-        // Acquire whatever is due now: mock values, or only the real sensors whose
-        // own cadence elapsed this tick (act.capture_mask bit i == sensor i).
-        if (act.capture_mask) {
-            if (live.mock_enabled) {
-                savia_reading_t r10 = { .ts_ms = now_ms, .port = 1, .depth_cm = 10,
-                                        .kind = READING_SOIL_MOISTURE, .value = 0.70f };
-                savia_reading_t r30 = { .ts_ms = now_ms, .port = 1, .depth_cm = 30,
-                                        .kind = READING_SOIL_MOISTURE, .value = 0.74f };
-                // Soil only, for the reason in seed_mock_readings: a mock air
-                // temperature on port 1 would masquerade as a reading of the probe.
-                cfg_lock();
-                storage_append_reading(&r10);
-                storage_append_reading(&r30);
-                cfg_unlock();
-            } else {
-                capture_slots(&live, act.capture_mask, now_ms);
-            }
+        // Acquire: the replay stands in for every probe under mock; otherwise only
+        // the sensors whose own cadence elapsed (act.capture_mask bit i == sensor i).
+        if (mock_active) {
+            mock_top_up(&live);
+        } else if (act.capture_mask) {
+            capture_slots(&live, act.capture_mask, now_ms);
         }
 
         if (!live.lora_enabled) {
@@ -448,6 +406,7 @@ int main(void) {
                 LOG_INFO("LoRa config patch: %u applied, %u rejected\n", ok, bad);
             }
         }
+        if (mock_active && !timed) mock_top_up(&live);   // the downlink may have set the clock
 
         // 2/3. Daily cycle at daily_hour LOCAL: run the LSTM only in LOCAL mode on
         //      an on-device build; in FORWARD the data is served/uplinked instead.
@@ -544,7 +503,8 @@ int main(void) {
                 // Sample first: the app can ask at any minute, and the model's
                 // newest step has to be a real reading of THIS hour, not a copy
                 // carried over from the last scheduled capture.
-                if (!live.mock_enabled) capture_slots(&live, 0xFF, inow);
+                if (mock_active) mock_top_up(&live);
+                else capture_slots(&live, 0xFF, inow);
                 inference_run_daily(inow);
             }
         }

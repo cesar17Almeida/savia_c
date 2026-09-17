@@ -29,6 +29,7 @@
 #include "savia/protocol.h"
 #include "savia/weather.h"
 #include "savia/inference.h"   // inference_on_device(): gates LOCAL mode + infer_dev
+#include "savia/mock_soil.h"   // mock replay: filled as soon as the phone sets the clock
 #include "savia/sdi12.h"       // probe console result (op "sdi12")
 #include "savia/log.h"
 #include "savia/uptime.h"
@@ -647,6 +648,9 @@ static void dispatch_write(uint16_t att_handle, const uint8_t *buffer, uint16_t 
                 if (outage >= CLOCK_OUTAGE_WARN_MS)
                     LOG_WARN("clock: board was powered off ~%llu min (BLE sync)\n",
                              (unsigned long long) (outage / 60000ULL));
+                // Mock: the replay can line up now, so this same connection sees data.
+                if (g_cfg && g_cfg->mock_enabled)
+                    mock_soil_fill(clock_now(up), g_cfg->utc_offset_min);
             } else LOG_INFO("BLE: time_sync %llu implausible, ignored\n",
                             (unsigned long long) ms);
         } else LOG_INFO("BLE: bad time_sync\n");
