@@ -6,7 +6,7 @@
 #include "savia/auth.h"
 
 static void hex(const uint8_t *d, int n, char *out) {
-    for (int i = 0; i < n; i++) sprintf(out + i * 2, "%02x", d[i]);
+    for (int i = 0; i < n; i++) snprintf(out + i * 2, 3, "%02x", d[i]);
 }
 
 int main(void) {
@@ -22,7 +22,6 @@ int main(void) {
     assert(auth_proof_equal(proof, proof));
     uint8_t other[32]; memset(other, 0x03, 32);
     assert(!auth_proof_equal(proof, other));
-    assert(!auth_key_is_set(nonce) || 1);   // nonce is 0x02.. (non-zero) -> set
     uint8_t zero[32]; memset(zero, 0, 32);
     assert(!auth_key_is_set(zero) && auth_key_is_set(key));
     printf("test_auth: proof cross-check vs Python OK\n");
