@@ -478,9 +478,12 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     }
 
     uint64_t now_up = savia_uptime_ms();
+    bool clock_taken = false;
     if (w.has_time) {
         uint64_t outage = 0;
-        switch (clock_apply_sync_lora(w.time_ms, now_up, s_period_s, &outage)) {
+        clock_sync_result_t r = clock_apply_sync_lora(w.time_ms, now_up, s_period_s, &outage);
+        clock_taken = r == CLOCK_SYNC_APPLIED || r == CLOCK_SYNC_REPAIRED;
+        switch (r) {
         case CLOCK_SYNC_APPLIED:
             if (outage >= CLOCK_OUTAGE_WARN_MS)
                 LOG_WARN("clock: board was powered off ~%llu min (LoRa sync)\n",
@@ -503,7 +506,7 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     if (w.n_past || w.n_future)
         weather_set(w.past_ta, w.n_past, w.future_ta, w.n_future, wall_now(now_up));
     LOG_INFO("LoRa downlink: %d B, %u past + %u future TA%s\n",
-             dn, w.n_past, w.n_future, w.has_time ? ", clock set" : "");
+             dn, w.n_past, w.n_future, clock_taken ? ", clock set" : "");
     return true;
 }
 
