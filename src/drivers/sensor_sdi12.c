@@ -3,6 +3,7 @@
 #include "savia/sdi12.h"
 #include "savia/pinmap.h"
 #include "savia/log.h"
+#include "savia/wdt.h"
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
 #include "hardware/sync.h"
@@ -106,6 +107,7 @@ static int sdi_decode(int ns, char *out, int max) {
 static int sdi12_transact(uint8_t gpio, const char *cmd, char *reply, size_t cap,
                           uint32_t win_ms) {
     if (cap < 2) return 0;
+    savia_wdt_feed();   // a measurement chains up to ~a dozen of these
     LOG_DEBUG("SDI12 GP%u -> \"%s\" (win %lu ms)\n", gpio, cmd, (unsigned long) win_ms);
     // Interrupts off from the break to the end of the capture (<= ~0.7 s): the
     // bit timing on both directions is busy-waited and cannot afford the BLE
@@ -202,7 +204,7 @@ static int sdi12_measure_values(uint8_t gpio, char addr, float *vals, int max) {
     int delay_s = 0, nvals = 0;
     if (!sdi12_parse_measure_hdr(reply, &delay_s, &nvals)) return -1;
     if (nvals > max) nvals = max;
-    if (delay_s > 0) sleep_ms((uint32_t) delay_s * 1000u + 200u);
+    if (delay_s > 0) savia_wdt_sleep_ms((uint32_t) delay_s * 1000u + 200u);   // up to 999 s
 
     int got = 0;
     for (int d = 0; d <= 9 && got < nvals; d++) {

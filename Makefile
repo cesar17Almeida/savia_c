@@ -10,6 +10,7 @@
 # Variables (sobreescribibles):
 #   make build BOARD=pico_w INFER=OFF    # Pico W (RP2040): sin LSTM on-device
 #   make build BLE=OFF                   # build mínimo sin radio
+#   make flash WDT_SELFTEST=ON           # bench test: hangs once, the watchdog must reset it
 #
 # Compilar necesita PICO_SDK_PATH + arm-none-eabi-gcc (ver tools/setup_pico_sdk.sh);
 # `make test` no necesita nada de eso.
@@ -21,6 +22,8 @@ BLE ?= ON
 # LSTM on-device por defecto (disponible en la app); ON solo cabe en pico2_w (RP2350).
 # Para la Pico W (RP2040): make build BOARD=pico_w INFER=OFF
 INFER ?= ON
+# Watchdog bench test: WDT_SELFTEST=ON hangs once after boot (never for production)
+WDT_SELFTEST ?= OFF
 
 # Credenciales OTAA locales (ver .env.example). Fichero ignorado por git: si no
 # existe, las variables quedan vacias y el firmware usa placeholders a cero.
@@ -53,11 +56,12 @@ build:
 	  rm -rf $(BUILD); \
 	fi
 	@# Never echo the cmake line: it carries the TTN AppKey.
-	@echo "cmake -S . -B $(BUILD) -G Ninja -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER) (credenciales OTAA: $(if $(LORA_APP_KEY),.env,placeholders a cero))"
+	@echo "cmake -S . -B $(BUILD) -G Ninja -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER) -DSAVIA_WDT_SELFTEST=$(WDT_SELFTEST) (credenciales OTAA: $(if $(LORA_APP_KEY),.env,placeholders a cero))"
 	@cmake -S . -B $(BUILD) -G Ninja \
 	  -DPICO_SDK_PATH=$(PICO_SDK_PATH) \
 	  $(if $(PICO_TOOLCHAIN_PATH),-DPICO_TOOLCHAIN_PATH=$(PICO_TOOLCHAIN_PATH)) \
 	  -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER) \
+	  -DSAVIA_WDT_SELFTEST=$(WDT_SELFTEST) \
 	  -DSAVIA_LORA_DEV_EUI=$(LORA_DEV_EUI) \
 	  -DSAVIA_LORA_APP_EUI=$(LORA_APP_EUI) \
 	  -DSAVIA_LORA_APP_KEY=$(LORA_APP_KEY)

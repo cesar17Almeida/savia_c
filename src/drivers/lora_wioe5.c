@@ -5,6 +5,7 @@
 #include "savia/storage.h"
 #include "savia/log.h"
 #include "savia/uptime.h"
+#include "savia/wdt.h"
 #include "savia/pinmap.h"      // SAVIA_GPIO_COUNT: refuse to open on unassigned pins
 
 #include "pico/stdlib.h"
@@ -154,6 +155,7 @@ static int read_line(char *buf, size_t cap, absolute_time_t deadline) {
     size_t n = 0;
     bool truncated = false;
     for (;;) {
+        savia_wdt_feed();   // JOIN and uplinks wait here for up to 15 s
         int64_t rem = absolute_time_diff_us(get_absolute_time(), deadline);
         if (rem <= 0) return -1;
         uint32_t slice = rem > 20000 ? 20000u : (uint32_t) rem;

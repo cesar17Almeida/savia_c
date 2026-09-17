@@ -33,6 +33,10 @@ option(SAVIA_ON_DEVICE_INFERENCE "Run the LSTM on-device (needs RP2350 RAM/FPU)"
 # sin radio (bring-up / pruebas de lógica en placa).
 option(SAVIA_ENABLE_BLE "Link the BLE stack (BTstack + CYW43)" ON)
 
+# Watchdog bench test: the firmware hangs once after boot on purpose and the
+# watchdog must reset it. Never in a production build.
+option(SAVIA_WDT_SELFTEST "Hang once after boot to prove the watchdog resets the board" OFF)
+
 pico_sdk_init()
 
 # --- Ejecutable -------------------------------------------------------------
@@ -49,6 +53,7 @@ add_executable(savia_c
   src/system/clock_store.c   # persist the sync ring (outage recovery) in flash
   src/system/actuator.c      # digital-actuator slot state (BLE op "act")
   src/system/log.c
+  src/system/wdt.c           # hardware watchdog (fed by the supervisor + long waits)
   src/system/inference.c
   src/system/weather.c       # TA forecast cache (LoRa downlink -> LSTM input)
   # power: deep sleep + schedule
@@ -78,6 +83,10 @@ if(NOT DEFINED SAVIA_LOG_LEVEL)
   set(SAVIA_LOG_LEVEL 1)
 endif()
 target_compile_definitions(savia_c PRIVATE SAVIA_LOG_LEVEL=${SAVIA_LOG_LEVEL})
+if(SAVIA_WDT_SELFTEST)
+  target_compile_definitions(savia_c PRIVATE SAVIA_WDT_SELFTEST=1)
+  message(WARNING "savia_c: SAVIA_WDT_SELFTEST=ON -- the firmware hangs once on purpose")
+endif()
 
 # Credenciales OTAA de TTN: NUNCA en el fuente. Llegan del .env local via Makefile
 # (-DSAVIA_LORA_APP_KEY=...). Si no se pasan, lora_wioe5.c usa placeholders a cero.
@@ -116,6 +125,7 @@ target_link_libraries(savia_c
   hardware_uart             # LoRa Wio-E5 (comandos AT)
   hardware_pio              # timing de SDI-12
   hardware_adc              # sensores analógicos (analog_linear, GP26-28)
+  hardware_watchdog         # reset when the supervisor stops responding
 )
 
 # Deep sleep real (P1.7: apagado del núcleo, despertar por el AON timer o el botón)

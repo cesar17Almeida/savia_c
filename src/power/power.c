@@ -2,6 +2,7 @@
 #include "savia/ble.h"
 #include "savia/log.h"
 #include "savia/uptime.h"
+#include "savia/wdt.h"
 #include "pico/stdlib.h"
 #include <string.h>
 
@@ -25,6 +26,7 @@ bool power_reset_button_held(const station_config_t *cfg, uint32_t hold_ms) {
     uint32_t elapsed = 0;
     while (elapsed < hold_ms) {
         if (gpio_get(cfg->wake_button_gpio)) return false;  // released early -> abort
+        savia_wdt_feed();
         sleep_ms(step_ms);
         elapsed += step_ms;
     }
@@ -47,6 +49,7 @@ savia_wake_reason_t power_deep_sleep(const station_config_t *cfg, uint32_t secon
             ble_config_dirty_pending()) {   // persist config writes promptly
             return SAVIA_WAKE_TIMER;
         }
+        savia_wdt_feed();
         sleep_ms(step_ms);
         elapsed += step_ms;
     }
@@ -146,6 +149,7 @@ bool power_deep_sleep_off(const station_config_t *cfg, const savia_deep_sleep_ct
     LOG_INFO("power: off (P1.7) for %u s; lposc=%u Hz; wake on timer or GP%u\n",
              (unsigned) ctx->nap_s, (unsigned) hz, (unsigned) cfg->wake_button_gpio);
     stdio_flush();
+    savia_wdt_feed();   // the watchdog powers down with the core
     int rc = powman_set_power_state(off);
     if (rc != PICO_OK) {
         LOG_WARN("power: power-off request rejected (%d) -> light naps this power cycle\n", rc);

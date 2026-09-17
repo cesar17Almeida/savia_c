@@ -30,6 +30,7 @@
 #include "savia/storage_store.h"
 #include "savia/log.h"
 #include "savia/uptime.h"
+#include "savia/wdt.h"
 
 // Mock dataset baseline (~20 Jun 2026 UTC). Shared by the mock seeding and the
 // boot inference self-test so both anchor to the same window.
@@ -194,11 +195,15 @@ int main(void) {
     // cycle left in the always-on scratch registers before anything else runs.
     savia_deep_wake_t wake;
     power_deep_wake_info(&wake);
+    savia_wdt_start();
     // Cold boot: let the USB-CDC host attach so EARLY boot logs are visible.
     // After a deep sleep every second awake is battery: only a short settle.
     sleep_ms(wake.resumed ? 300 : 2500);
     savia_log_set_clock(log_clock);   // timestamp every log line
     savia_log_set_flush(log_flush);  // drain USB-CDC per line: no dropped logs
+    savia_wdt_feed();
+    if (savia_wdt_caused_reboot())
+        LOG_WARN("boot: the watchdog reset the board (the firmware stopped responding)\n");
 
     station_config_t cfg;
     config_load_defaults(&cfg);
@@ -259,7 +264,9 @@ int main(void) {
     storage_store_load();
     bool mock_seeded = false;
     if (cfg.mock_enabled) { seed_mock_readings(); mock_seeded = true; }   // dev dataset
+    savia_wdt_feed();
     ble_init(&cfg);
+    savia_wdt_feed();
     status_led_init();   // onboard LED: solid=paired, 1s blink=BLE on, 3s blink=operating
     if (cfg.lora_enabled) {
         lora_init(&cfg);
@@ -328,6 +335,14 @@ int main(void) {
     bool was_timed = clock_is_set();   // back-fill trigger: unset -> set transition
 
     for (;;) {
+        savia_wdt_feed();
+#if SAVIA_WDT_SELFTEST
+        // Bench check (make flash WDT_SELFTEST=ON): hang once, the watchdog must reset us.
+        if (!savia_wdt_caused_reboot()) {
+            LOG_WARN("wdt selftest: hanging on purpose, expect a reset in %u ms\n", SAVIA_WDT_TIMEOUT_MS);
+            for (;;) tight_loop_contents();
+        }
+#endif
         uint64_t up = savia_uptime_ms();
         bool timed = clock_is_set();
         uint64_t now_ms = timed ? clock_now(up) : up;
