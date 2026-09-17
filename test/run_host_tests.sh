@@ -12,6 +12,8 @@ CFLAGS="-std=c11 -Wall -Wextra -Iinclude"
 echo "== 1) config test =="
 "$CC" $CFLAGS test/test_config.c src/system/config.c -o /tmp/savia_test_config
 /tmp/savia_test_config
+"$CC" $CFLAGS -DSAVIA_MOCK_DATA=1 test/test_config.c src/system/config.c -o /tmp/savia_test_config_mock
+/tmp/savia_test_config_mock
 
 echo ""
 echo "== 1b) pinmap test =="

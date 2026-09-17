@@ -36,7 +36,12 @@ void config_load_defaults(station_config_t *cfg) {
 
     // Mock data OFF by default -- the station reads the real sensor out of the box.
     // Only the client (TerraLink over BLE) may turn mock on; see ble_gatt config write.
+    // A MOCK build (make build MOCK=ON) is the exception: it always replays the dataset.
+#if SAVIA_MOCK_DATA
+    cfg->mock_enabled = true;
+#else
     cfg->mock_enabled = false;
+#endif
     cfg->log_level = 1;            // SAVIA_LOG_INFO
 
     // No sensors out of the box: the installer declares the whole table from the

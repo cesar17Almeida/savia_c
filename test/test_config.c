@@ -18,7 +18,11 @@ int main(void) {
     assert(cfg.wake_button_gpio == 15);
     assert(cfg.capture_interval_s == 3600);
     assert(cfg.daily_hour == 20 && cfg.daily_min == 0);   // 20:00 LOCAL
+#if SAVIA_MOCK_DATA
+    assert(cfg.mock_enabled == true);    // a MOCK build always replays the dataset
+#else
     assert(cfg.mock_enabled == false);   // mock OFF by default; only the client enables it
+#endif
     assert(cfg.log_level == 1);
 
     // Empty sensor table.

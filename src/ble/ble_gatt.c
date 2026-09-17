@@ -422,7 +422,14 @@ static void handle_config_write(const uint8_t *buf, uint16_t len) {
                 next.ble_name[SAVIA_BLE_NAME_MAX - 1] = 0;
             }
         }
-        if (ok && cp.has_mock) next.mock_enabled = cp.mock;
+        if (ok && cp.has_mock) {
+#if SAVIA_MOCK_DATA
+            // A MOCK image never reads the probe: switching mock off needs a normal build.
+            if (!cp.mock) { ok = false; err = "mock build: reflash without MOCK"; }
+#else
+            next.mock_enabled = cp.mock;
+#endif
+        }
         if (ok && cp.has_log_level) {
             if (cp.log_level > SAVIA_LOG_WARN) {
                 ok = false; err = "log_level out of range";

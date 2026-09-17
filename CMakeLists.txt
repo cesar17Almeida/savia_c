@@ -37,6 +37,10 @@ option(SAVIA_ENABLE_BLE "Link the BLE stack (BTstack + CYW43)" ON)
 # watchdog must reset it. Never in a production build.
 option(SAVIA_WDT_SELFTEST "Hang once after boot to prove the watchdog resets the board" OFF)
 
+# Dev image: soil moisture is a replay of the LSTM dataset (48 h back + 24 h ahead)
+# instead of the probe; mock can't be switched off from the app. Never in production.
+option(SAVIA_MOCK_DATA "Replay dataset soil moisture instead of reading the probe" OFF)
+
 pico_sdk_init()
 
 # --- Ejecutable -------------------------------------------------------------
@@ -88,6 +92,12 @@ if(SAVIA_WDT_SELFTEST)
   target_compile_definitions(savia_c PRIVATE SAVIA_WDT_SELFTEST=1)
   message(WARNING "savia_c: SAVIA_WDT_SELFTEST=ON -- the firmware hangs once on purpose")
 endif()
+if(SAVIA_MOCK_DATA)
+  target_compile_definitions(savia_c PRIVATE SAVIA_MOCK_DATA=1)
+  message(WARNING "savia_c: SAVIA_MOCK_DATA=ON -- soil moisture is a dataset replay, not the probe")
+else()
+  target_compile_definitions(savia_c PRIVATE SAVIA_MOCK_DATA=0)
+endif()
 
 # Credenciales OTAA de TTN: NUNCA en el fuente. Llegan del .env local via Makefile
 # (-DSAVIA_LORA_APP_KEY=...). Si no se pasan, lora_wioe5.c usa placeholders a cero.
@@ -114,6 +124,9 @@ else()
   target_compile_definitions(savia_c PRIVATE SAVIA_ON_DEVICE_INFERENCE=0)
   set(SAVIA_VARIANT "${PICO_BOARD}-mloffdevice")
   message(STATUS "savia_c: inferencia OFF-device (la hace la app)")
+endif()
+if(SAVIA_MOCK_DATA)
+  set(SAVIA_VARIANT "${SAVIA_VARIANT}-mock")   # never mistaken for a field image
 endif()
 set_target_properties(savia_c PROPERTIES OUTPUT_NAME "savia_c-${SAVIA_VARIANT}")
 
