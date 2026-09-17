@@ -325,25 +325,36 @@ static uint8_t build_soil_recs(uint64_t now_ms, lora_soil_rec_t *recs) {
     uint64_t from = (uint64_t)(s_last_soil_hour_s + 1) * 1000u;
     uint64_t lookback = now_ms > 5u * 3600000u ? now_ms - 5u * 3600000u : 0;
     if (from < lookback) from = lookback;         // cap the backlog window
-    savia_aggregate_t aggs[24];
-    size_t na = storage_aggregate_hourly(from, now_ms, 0, aggs, 24);
+    // One series at a time (a few hourly buckets each): an extra sensor can no longer
+    // crowd the newest hours out, and a second probe no longer mixes into these.
+    static const struct { uint8_t kind, depth; } series[] = {
+        { READING_SOIL_MOISTURE, 10 }, { READING_SOIL_MOISTURE, 30 },
+        { READING_AIR_TEMPERATURE, SAVIA_ANY_DEPTH },
+    };
     uint8_t n = 0;
-    for (size_t i = 0; i < na && n < LORA_SOIL_RECS_MAX; i++) {
-        uint32_t hour_s = (uint32_t)(aggs[i].hour_ms / 1000u);
-        uint8_t k = 0;                            // find/create the hour record
-        for (; k < n; k++) if (recs[k].ts_hour_s == hour_s) break;
-        if (k == n) {
-            recs[n] = (lora_soil_rec_t){ .ts_hour_s = hour_s };
-            n++;
-        }
-        if (aggs[i].kind == READING_SOIL_MOISTURE && aggs[i].depth_cm == 10) {
-            recs[k].hs10 = aggs[i].mean; recs[k].has_hs10 = true;
-        } else if (aggs[i].kind == READING_SOIL_MOISTURE && aggs[i].depth_cm == 30) {
-            recs[k].hs30 = aggs[i].mean; recs[k].has_hs30 = true;
-        } else if (aggs[i].kind == READING_AIR_TEMPERATURE) {
-            recs[k].ta = aggs[i].mean; recs[k].has_ta = true;
+    for (size_t s = 0; s < sizeof series / sizeof series[0]; s++) {
+        savia_aggregate_t aggs[8];
+        size_t na = storage_aggregate_series(from, now_ms, series[s].kind, series[s].depth,
+                                             aggs, sizeof aggs / sizeof aggs[0]);
+        for (size_t i = 0; i < na; i++) {
+            uint32_t hour_s = (uint32_t)(aggs[i].hour_ms / 1000u);
+            uint8_t k = 0;                        // find/create the hour record
+            for (; k < n; k++) if (recs[k].ts_hour_s == hour_s) break;
+            if (k == n) {
+                if (n >= LORA_SOIL_RECS_MAX) continue;
+                recs[n] = (lora_soil_rec_t){ .ts_hour_s = hour_s };
+                n++;
+            }
+            if (s == 0)      { recs[k].hs10 = aggs[i].mean; recs[k].has_hs10 = true; }
+            else if (s == 1) { recs[k].hs30 = aggs[i].mean; recs[k].has_hs30 = true; }
+            else             { recs[k].ta = aggs[i].mean;   recs[k].has_ta = true; }
         }
     }
+    // Oldest first, as the backlog is drained.
+    for (uint8_t a = 1; a < n; a++)
+        for (uint8_t b = a; b > 0 && recs[b - 1].ts_hour_s > recs[b].ts_hour_s; b--) {
+            lora_soil_rec_t t = recs[b]; recs[b] = recs[b - 1]; recs[b - 1] = t;
+        }
     return n;
 }
 

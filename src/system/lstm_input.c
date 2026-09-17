@@ -63,9 +63,10 @@ lstm_input_status_t lstm_gather_inputs(uint64_t now_ms, lstm_raw_inputs_t *out) 
     uint64_t from = latest_hour - (uint64_t)(LSTM_PAST_STEPS - 1) * HOUR_MS;
     uint64_t to   = latest_hour + HOUR_MS;   // half-open; includes the latest bucket
 
-    // 48 h x up to a few series/depths; sized with margin.
-    static savia_aggregate_t aggs[208];
-    size_t n = storage_aggregate_hourly(from, to, 0, aggs, sizeof(aggs) / sizeof(aggs[0]));
+    // One series at a time (48 hourly buckets at most), so other sensors never
+    // push the newest soil hours out of the buffer.
+    static savia_aggregate_t aggs[LSTM_PAST_STEPS + 8];
+    const size_t cap = sizeof(aggs) / sizeof(aggs[0]);
 
     // HS10 / HS30 from the soil probe. Two independent guards, because they catch
     // different failures: the coverage floor catches a station too young to have a
@@ -73,8 +74,10 @@ lstm_input_status_t lstm_gather_inputs(uint64_t now_ms, lstm_raw_inputs_t *out) 
     // staleness bound catches a veteran station whose probe died hours ago -- that
     // one clears the floor easily and would forecast from soil that no longer exists.
     int age10, age30, gap10, gap30;
+    size_t n = storage_aggregate_series(from, to, READING_SOIL_MOISTURE, 10, aggs, cap);
     int real10 = fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 10,
                              out->hs10, &age10, &gap10);
+    n = storage_aggregate_series(from, to, READING_SOIL_MOISTURE, 30, aggs, cap);
     int real30 = fill_series(aggs, n, latest_hour, READING_SOIL_MOISTURE, 30,
                              out->hs30, &age30, &gap30);
     if (real10 < LSTM_MIN_PAST_HOURS || real30 < LSTM_MIN_PAST_HOURS)

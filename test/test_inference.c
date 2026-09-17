@@ -190,6 +190,48 @@ int main(void) {
     assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_GAP_TOO_LONG);
     printf("test_inference: staleness + continuity bounds OK\n");
 
+    // --- a second sensor must not starve or pollute the soil series ---
+    // AquaCheck (4 depths) + DHT11 (TA + RH) is 288 hourly buckets over 48 h; the old
+    // shared 208-bucket buffer dropped the newest hours and the window read as stale.
+    storage_init();
+    for (int age = 47; age >= 0; age--) {
+        uint64_t ts = latest - (uint64_t) age * HOUR_MS + 60000ULL;
+        for (int d = 10; d <= 40; d += 10) {
+            savia_reading_t r = { .ts_ms = ts, .port = 1, .depth_cm = (uint8_t) d,
+                                  .kind = READING_SOIL_MOISTURE, .value = 0.60f + 0.001f * d };
+            storage_append_reading(&r);
+        }
+        savia_reading_t t = { .ts_ms = ts, .port = 2, .kind = READING_AIR_TEMPERATURE, .value = 24.0f };
+        savia_reading_t h = { .ts_ms = ts, .port = 2, .kind = READING_AIR_HUMIDITY, .value = 55.0f };
+        storage_append_reading(&t);
+        storage_append_reading(&h);
+    }
+    weather_set(pta, WEATHER_PAST_MAX, fta, WEATHER_FUTURE_MAX, now);
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_OK);
+    assert(close_to(raw.hs10[47], 0.61f) && close_to(raw.hs30[47], 0.63f));
+
+    // Two probes: the series comes from the lowest port only, never a mix.
+    storage_init();
+    for (int age = 47; age >= 0; age--) {
+        uint64_t ts = latest - (uint64_t) age * HOUR_MS + 60000ULL;
+        for (uint8_t port = 1; port <= 2; port++) {
+            float v = port == 1 ? 0.70f : 0.40f;
+            savia_reading_t a = { .ts_ms = ts, .port = port, .depth_cm = 10,
+                                  .kind = READING_SOIL_MOISTURE, .value = v };
+            savia_reading_t b = { .ts_ms = ts, .port = port, .depth_cm = 30,
+                                  .kind = READING_SOIL_MOISTURE, .value = v };
+            storage_append_reading(&a);
+            storage_append_reading(&b);
+        }
+    }
+    assert(lstm_gather_inputs(now, &raw) == LSTM_INPUT_OK);
+    for (int i = 0; i < LSTM_PAST_STEPS; i++) assert(close_to(raw.hs10[i], 0.70f));
+    savia_aggregate_t one[4];
+    assert(storage_aggregate_series(latest, latest + HOUR_MS, READING_SOIL_MOISTURE, 30, one, 4) == 1);
+    assert(one[0].port == 1 && one[0].count == 1);
+    assert(storage_aggregate_series(latest, latest + HOUR_MS, READING_DISTANCE, 0, one, 4) == 0);
+    printf("test_inference: other sensors neither starve nor mix into the window OK\n");
+
     // --- build tensors: scaling + model column order [TA, HS10, HS30] ---
     memset(&raw, 0, sizeof(raw));
     for (int t = 0; t < LSTM_PAST_STEPS; t++) {

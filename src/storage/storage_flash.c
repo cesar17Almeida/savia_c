@@ -141,16 +141,22 @@ size_t storage_count_raw(uint64_t from_ms, uint64_t to_ms) {
     return n;
 }
 
-size_t storage_aggregate_hourly(uint64_t from_ms, uint64_t to_ms, size_t limit,
-                                savia_aggregate_t *out, size_t out_cap) {
-    size_t eff = out_cap;
-    if (limit != 0 && limit < eff) eff = limit;
+// Series filter for aggregate(): one (kind, depth) from one port; NULL takes everything.
+typedef struct { uint8_t kind, depth_cm, port; } series_filter_t;
+
+static bool series_match(const savia_reading_t *r, uint8_t kind, uint8_t depth_cm) {
+    return r->kind == kind && (depth_cm == SAVIA_ANY_DEPTH || r->depth_cm == depth_cm);
+}
+
+static size_t aggregate(uint64_t from_ms, uint64_t to_ms, size_t eff,
+                        const series_filter_t *f, savia_aggregate_t *out) {
     size_t idx = ring_start(s_rd_count, s_rd_head, READINGS_CAP);
     size_t n = 0;
     for (size_t i = 0; i < s_rd_count; i++) {
         const savia_reading_t *r = &s_rd[idx];
         idx = (idx + 1) % READINGS_CAP;
         if (!in_range(r->ts_ms, from_ms, to_ms)) continue;
+        if (f && (r->port != f->port || !series_match(r, f->kind, f->depth_cm))) continue;
         uint64_t hour = r->ts_ms - (r->ts_ms % 3600000ULL);
 
         // find an existing bucket (hour, port, kind, depth)
@@ -182,6 +188,28 @@ size_t storage_aggregate_hourly(uint64_t from_ms, uint64_t to_ms, size_t limit,
         if (out[j].count) out[j].mean /= (float) out[j].count;
     }
     return n;
+}
+
+size_t storage_aggregate_hourly(uint64_t from_ms, uint64_t to_ms, size_t limit,
+                                savia_aggregate_t *out, size_t out_cap) {
+    size_t eff = out_cap;
+    if (limit != 0 && limit < eff) eff = limit;
+    return aggregate(from_ms, to_ms, eff, NULL, out);
+}
+
+size_t storage_aggregate_series(uint64_t from_ms, uint64_t to_ms, uint8_t kind,
+                                uint8_t depth_cm, savia_aggregate_t *out, size_t out_cap) {
+    int port = -1;                          // lowest port carrying the series in range
+    size_t idx = ring_start(s_rd_count, s_rd_head, READINGS_CAP);
+    for (size_t i = 0; i < s_rd_count; i++) {
+        const savia_reading_t *r = &s_rd[idx];
+        idx = (idx + 1) % READINGS_CAP;
+        if (in_range(r->ts_ms, from_ms, to_ms) && series_match(r, kind, depth_cm) &&
+            (port < 0 || r->port < port)) port = r->port;
+    }
+    if (port < 0) return 0;
+    series_filter_t f = { kind, depth_cm, (uint8_t) port };
+    return aggregate(from_ms, to_ms, out_cap, &f, out);
 }
 
 // --- persistence (SDK-free halves; the flash side is storage_store.c) --------

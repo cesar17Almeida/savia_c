@@ -86,6 +86,12 @@ size_t storage_count_raw(uint64_t from_ms, uint64_t to_ms);
 size_t storage_aggregate_hourly(uint64_t from_ms, uint64_t to_ms, size_t limit,
                                 savia_aggregate_t *out, size_t out_cap);
 
+// Hourly buckets of one (kind, depth_cm) series, taken from the lowest port that
+// has it in range: other sensors can neither crowd it out of `out` nor mix into it.
+#define SAVIA_ANY_DEPTH 0xFF
+size_t storage_aggregate_series(uint64_t from_ms, uint64_t to_ms, uint8_t kind,
+                                uint8_t depth_cm, savia_aggregate_t *out, size_t out_cap);
+
 // --- Predictions (empty on Pico WH: inference is off-device) ---
 bool   storage_append_prediction(const savia_prediction_t *p);
 void   storage_clear_predictions(void);   // wipe only predictions (dev: re-mock the forecast)
