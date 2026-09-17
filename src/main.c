@@ -29,6 +29,7 @@
 #include "savia/sensor_catalog.h"
 #include "savia/storage_store.h"
 #include "savia/log.h"
+#include "savia/uptime.h"
 
 // Mock dataset baseline (~20 Jun 2026 UTC). Shared by the mock seeding and the
 // boot inference self-test so both anchor to the same window.
@@ -179,7 +180,7 @@ static void seed_schedule_from_storage(savia_scheduler_t *s, const station_confi
 
 // Time source for log line stamps: wall-clock once synced, uptime before that.
 static uint64_t log_clock(bool *wall) {
-    uint64_t up = to_ms_since_boot(get_absolute_time());
+    uint64_t up = savia_uptime_ms();
     if (clock_is_set()) { *wall = true; return clock_now(up); }
     *wall = false;
     return up;
@@ -223,7 +224,7 @@ int main(void) {
     // Deep-sleep wake: the always-on timer kept counting while the core was off,
     // so the clock continues from it (no outage, no provisional readings).
     if (wake.resumed) {
-        uint64_t up_w = to_ms_since_boot(get_absolute_time());
+        uint64_t up_w = savia_uptime_ms();
         if (clock_resume_from_aon(wake.now_wall_ms, up_w, wake.clock_uncertainty_ms)) {
             LOG_INFO("power: woke from deep sleep after %u s (%s); clock from the AON timer, +/-%u ms\n",
                      (unsigned)(wake.slept_ms / 1000u), wake.button ? "button" : "timer",
@@ -269,7 +270,7 @@ int main(void) {
     // Deep-sleep wake: same LoRa session as before the nap (the module stayed
     // powered and joined): no BOOT frame, coords already sent, period gate kept.
     if (wake.resumed && cfg.lora_enabled) {
-        uint64_t up_l = to_ms_since_boot(get_absolute_time());
+        uint64_t up_l = savia_uptime_ms();
         lora_restore_cycle_state(wake.lora_last_attempt_s, wake.lora_last_soil_hour_s,
                                  clock_now(up_l), &cfg);
     }
@@ -297,7 +298,7 @@ int main(void) {
     // Now that the clock is (usually) known, decide whether the stored TA window
     // still describes the hour we are in. A downlink during the cycle above wins.
     {
-        uint64_t up0 = to_ms_since_boot(get_absolute_time());
+        uint64_t up0 = savia_uptime_ms();
         storage_store_adopt_weather(clock_is_set() ? clock_now(up0) : 0);
     }
 
@@ -327,7 +328,7 @@ int main(void) {
     bool was_timed = clock_is_set();   // back-fill trigger: unset -> set transition
 
     for (;;) {
-        uint64_t up = to_ms_since_boot(get_absolute_time());
+        uint64_t up = savia_uptime_ms();
         bool timed = clock_is_set();
         uint64_t now_ms = timed ? clock_now(up) : up;
 
@@ -466,7 +467,7 @@ int main(void) {
             // carries it) and nothing pending from the app; otherwise the light
             // nap. If the power manager refuses, the light nap is the fallback
             // for the rest of this power cycle.
-            uint64_t up_n = to_ms_since_boot(get_absolute_time());
+            uint64_t up_n = savia_uptime_ms();
             uint64_t wall_n = clock_is_set() ? clock_now(up_n) : 0;
             bool app_busy = ble_is_connected() || ble_lora_ping_pending() ||
                             ble_lora_at_pending() || ble_sdi12_pending() ||
@@ -504,7 +505,7 @@ int main(void) {
             if (live.inference_mode == SAVIA_INFER_LOCAL && inference_on_device()) {
                 // Recompute the wall clock: the nap above may have advanced it
                 // well past the now_ms captured at the top of the loop.
-                uint64_t up2 = to_ms_since_boot(get_absolute_time());
+                uint64_t up2 = savia_uptime_ms();
                 uint64_t inow = clock_is_set() ? clock_now(up2) : up2;
                 LOG_INFO("BLE: running on-demand inference\n");
                 // Sample first: the app can ask at any minute, and the model's
@@ -520,7 +521,7 @@ int main(void) {
         // uplink, capture the ACK's RSSI/SNR, and persist the signal.
         if (ble_take_lora_ping()) {
             uint64_t pnow = clock_is_set()
-                ? clock_now(to_ms_since_boot(get_absolute_time())) : 0;
+                ? clock_now(savia_uptime_ms()) : 0;
             lora_ping(live.lora_uart_tx_gpio, live.lora_uart_rx_gpio, pnow);
             lora_persist_signal(&cfg);
             clock_persist_if_dirty();   // the ping's downlink may carry a fresh clock

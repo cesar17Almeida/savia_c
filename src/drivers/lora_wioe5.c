@@ -4,6 +4,7 @@
 #include "savia/clock.h"
 #include "savia/storage.h"
 #include "savia/log.h"
+#include "savia/uptime.h"
 #include "savia/pinmap.h"      // SAVIA_GPIO_COUNT: refuse to open on unassigned pins
 
 #include "pico/stdlib.h"
@@ -54,7 +55,7 @@ static uart_inst_t *s_uart;
 static bool     s_ready;            // UART up + module configured
 static bool     s_joined;
 static bool     s_attempted;        // a cycle has run (so the first one is immediate)
-static uint32_t s_last_attempt_ms;  // uptime ms of the last cycle attempt
+static uint64_t s_last_attempt_ms;  // uptime ms of the last cycle attempt (modular math)
 static uint8_t  s_tx, s_rx;         // GPIOs the module is currently wired to (0 = none)
 
 // Last downlink signal measured from an uplink ACK (the only signal the node sees).
@@ -314,7 +315,7 @@ static bool forecast_min_upcoming(uint64_t now_ms, float *out_min) {
     return found;
 }
 
-static uint64_t wall_now(uint32_t uptime_ms) {
+static uint64_t wall_now(uint64_t uptime_ms) {
     return clock_is_set() ? clock_now(uptime_ms) : 0;
 }
 
@@ -473,7 +474,7 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
         return true;
     }
 
-    uint32_t now_up = to_ms_since_boot(get_absolute_time());
+    uint64_t now_up = savia_uptime_ms();
     if (w.has_time) {
         uint64_t outage = 0;
         if (clock_apply_sync(w.time_ms, now_up, CLOCK_SRC_LORA, &outage)) {
@@ -506,7 +507,7 @@ bool lora_init(const station_config_t *cfg) {
 
 bool lora_cycle(const station_config_t *cfg) {
     if (!cfg) return false;
-    uint32_t up = to_ms_since_boot(get_absolute_time());
+    uint64_t up = savia_uptime_ms();
 
     // Clamp the app-set period so a bad/zero config can't spam the network.
     uint32_t period_s = cfg->lora_period_s;
@@ -514,7 +515,7 @@ bool lora_cycle(const station_config_t *cfg) {
     if (period_s > SAVIA_LORA_PERIOD_MAX_S) period_s = SAVIA_LORA_PERIOD_MAX_S;
 
     // One uplink per period; the first cycle after boot runs immediately.
-    if (s_attempted && (up - s_last_attempt_ms) < period_s * 1000u) return false;
+    if (s_attempted && (up - s_last_attempt_ms) < (uint64_t) period_s * 1000u) return false;
     s_attempted = true;
     s_last_attempt_ms = up;
     LOG_INFO("LoRa: cycle due (period=%us)\n", (unsigned) period_s);
@@ -540,8 +541,8 @@ bool lora_cycle(const station_config_t *cfg) {
 
 uint32_t lora_last_attempt_epoch_s(uint64_t now_wall_ms) {
     if (!s_attempted || now_wall_ms == 0) return 0;
-    uint32_t up = to_ms_since_boot(get_absolute_time());
-    uint32_t ago_ms = up - s_last_attempt_ms;
+    uint64_t up = savia_uptime_ms();
+    uint64_t ago_ms = up - s_last_attempt_ms;
     if (now_wall_ms <= ago_ms) return 0;
     return (uint32_t)((now_wall_ms - ago_ms) / 1000ULL);
 }
@@ -564,9 +565,9 @@ void lora_restore_cycle_state(uint32_t last_attempt_s, uint32_t last_soil_hour_s
     if (last_attempt_s && now_wall_ms >= last_ms && now_wall_ms - last_ms < 0x7FFFFFFFULL) {
         // Backdate the uptime gate so the period counts from the real last
         // attempt (unsigned wrap is fine: the comparison is modular).
-        uint32_t up = to_ms_since_boot(get_absolute_time());
+        uint64_t up = savia_uptime_ms();
         s_attempted = true;
-        s_last_attempt_ms = up - (uint32_t)(now_wall_ms - last_ms);
+        s_last_attempt_ms = up - (now_wall_ms - last_ms);
         LOG_INFO("LoRa: cadence restored after deep sleep (last cycle %us ago)\n",
                  (unsigned)((now_wall_ms - last_ms) / 1000ULL));
     }
@@ -577,10 +578,9 @@ uint32_t lora_secs_until_due(const station_config_t *cfg) {
     uint32_t period_s = cfg->lora_period_s;
     if (period_s < SAVIA_LORA_PERIOD_MIN_S) period_s = SAVIA_LORA_PERIOD_MIN_S;
     if (period_s > SAVIA_LORA_PERIOD_MAX_S) period_s = SAVIA_LORA_PERIOD_MAX_S;
-    uint32_t up = to_ms_since_boot(get_absolute_time());
-    uint32_t elapsed = up - s_last_attempt_ms;
-    uint32_t period_ms = period_s * 1000u;
-    return elapsed >= period_ms ? 0 : (period_ms - elapsed + 999u) / 1000u;
+    uint64_t elapsed = savia_uptime_ms() - s_last_attempt_ms;
+    uint64_t period_ms = (uint64_t) period_s * 1000u;
+    return elapsed >= period_ms ? 0 : (uint32_t)((period_ms - elapsed + 999u) / 1000u);
 }
 
 bool lora_take_config_tlv(uint8_t *buf, size_t cap, size_t *len) {

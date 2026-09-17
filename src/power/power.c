@@ -1,6 +1,7 @@
 #include "savia/power.h"
 #include "savia/ble.h"
 #include "savia/log.h"
+#include "savia/uptime.h"
 #include "pico/stdlib.h"
 #include <string.h>
 
@@ -104,7 +105,7 @@ bool power_deep_sleep_off(const station_config_t *cfg, const savia_deep_sleep_ct
     // calibration and the caller's radio shutdown took) into the timer.
     uint32_t hz = lposc_measure_hz();
     powman_timer_set_1khz_tick_source_lposc_with_hz(hz);
-    uint64_t up = to_ms_since_boot(get_absolute_time());
+    uint64_t up = savia_uptime_ms();
     uint64_t wall = ctx->now_wall_ms + (up - ctx->uptime_ms);
     powman_timer_set_ms(wall);
     if (!powman_timer_is_running()) powman_timer_start();

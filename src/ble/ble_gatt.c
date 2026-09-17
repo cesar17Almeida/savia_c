@@ -31,6 +31,7 @@
 #include "savia/inference.h"   // inference_on_device(): gates LOCAL mode + infer_dev
 #include "savia/sdi12.h"       // probe console result (op "sdi12")
 #include "savia/log.h"
+#include "savia/uptime.h"
 
 // --- generated ATT handles --------------------------------------------------
 #define H_GAP_NAME      ATT_CHARACTERISTIC_GAP_DEVICE_NAME_01_VALUE_HANDLE
@@ -119,7 +120,7 @@ static savia_aggregate_t  q_agg[160];   // 48 h x up to 3 series x 2 depths of b
 static savia_prediction_t q_pred[32];   // holds the full 24 h LSTM forecast
 
 static uint64_t wall_now(void) {
-    uint64_t up = to_ms_since_boot(get_absolute_time());
+    uint64_t up = savia_uptime_ms();
     return clock_is_set() ? clock_now(up) : up;
 }
 
@@ -573,7 +574,7 @@ static uint16_t att_read_cb(hci_con_handle_t con, uint16_t att_handle,
     }
     if (att_handle == H_STATUS) {
         uint8_t tmp[384];   // ~220 B base + 17 B per actuator slot
-        uint64_t up_ms = to_ms_since_boot(get_absolute_time());
+        uint64_t up_ms = savia_uptime_ms();
         uint32_t up_s = (uint32_t)(up_ms / 1000);
         lora_status_t ls; lora_get_status(&ls);
         uint64_t now_ms = clock_is_set() ? clock_now(up_ms) : 0;
@@ -633,7 +634,7 @@ static void dispatch_write(uint16_t att_handle, const uint8_t *buffer, uint16_t 
         uint64_t ms;
         if (ble_parse_time_sync(buffer, buffer_size, &ms)) {
             uint64_t outage = 0;
-            uint64_t up = to_ms_since_boot(get_absolute_time());
+            uint64_t up = savia_uptime_ms();
             // Trusted when this link proved the password, or when there is none: an open
             // station lets anyone reconfigure it anyway, and its owner must be able to
             // repair a clock someone pushed into the future.
