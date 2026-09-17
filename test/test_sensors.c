@@ -374,6 +374,40 @@ int main(void) {
         printf("test_sensors: oversized and non-finite wire values rejected\n");
     }
 
+    // CBOR lengths near 2^64 must fail cleanly: pos + len used to wrap past the
+    // bounds check, read beyond the write and even move the cursor backwards.
+    {
+        static const uint8_t evil_text[] = {
+            0x7b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 'a' };
+        static const uint8_t evil_bytes[] = {
+            0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 'a' };
+        cbor_reader_t hr;
+        const char *hs; const uint8_t *hp; size_t hn;
+        cbor_r_init(&hr, evil_text, sizeof evil_text);
+        assert(!cbor_r_text(&hr, &hs, &hn) && hr.err);
+        cbor_r_init(&hr, evil_bytes, sizeof evil_bytes);
+        assert(!cbor_r_bytes(&hr, &hp, &hn) && hr.err);
+        cbor_r_init(&hr, evil_bytes, sizeof evil_bytes);
+        assert(!cbor_r_skip(&hr) && hr.err);
+
+        static const uint8_t evil_name[] = {
+            0xa2, 0x64, 'n', 'a', 'm', 'e',
+            0x7b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 'a', 'b', 'c' };
+        ble_config_patch_t ev;
+        assert(!ble_parse_config_patch(evil_name, sizeof evil_name, &ev));
+        assert(!ev.has_name);
+
+        // Unknown key whose value length jumps the cursor back onto that key: an
+        // endless loop inside an indefinite map before the fix.
+        static const uint8_t evil_loop[] = {
+            0xbf, 0x63, 'z', 'z', 'z',
+            0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xf3 };
+        assert(!ble_parse_config_patch(evil_loop, sizeof evil_loop, &ev));
+        ble_auth_msg_t am;                         // the pre-auth characteristic too
+        assert(!ble_parse_auth(evil_loop, sizeof evil_loop, &am));
+        printf("test_sensors: hostile CBOR lengths rejected\n");
+    }
+
     printf("test_sensors: OK\n");
     return 0;
 }

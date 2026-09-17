@@ -144,7 +144,7 @@ bool cbor_r_bool(cbor_reader_t *r, bool *v) {
 bool cbor_r_text(cbor_reader_t *r, const char **s, size_t *n) {
     uint8_t major; uint64_t val;
     if (!r_head(r, &major, &val) || major != 3) { r->err = true; return false; }
-    if (r->pos + val > r->len) { r->err = true; return false; }
+    if (val > r->len - r->pos) { r->err = true; return false; }   // never pos + val: it wraps
     *s = (const char *) (r->buf + r->pos);
     *n = (size_t) val;
     r->pos += val;
@@ -154,7 +154,7 @@ bool cbor_r_text(cbor_reader_t *r, const char **s, size_t *n) {
 bool cbor_r_bytes(cbor_reader_t *r, const uint8_t **p, size_t *n) {
     uint8_t major; uint64_t val;
     if (!r_head(r, &major, &val) || major != 2) { r->err = true; return false; }
-    if (r->pos + val > r->len) { r->err = true; return false; }
+    if (val > r->len - r->pos) { r->err = true; return false; }
     *p = r->buf + r->pos;
     *n = (size_t) val;
     r->pos += val;
@@ -242,7 +242,7 @@ static bool cbor_r_skip_depth(cbor_reader_t *r, unsigned depth) {
         case 0: case 1: case 7:        // uint / negint / simple+float (bytes consumed by r_head)
             return !r->err;
         case 2: case 3:                // bytes / text: skip `val` bytes
-            if (r->pos + val > r->len) { r->err = true; return false; }
+            if (val > r->len - r->pos) { r->err = true; return false; }
             r->pos += val;
             return true;
         case 4:                        // array: skip `val` items
