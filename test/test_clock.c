@@ -129,6 +129,23 @@ int main(void) {
         assert(!clock_apply_sync(T0 + 7200000ULL - 60000ULL, 3000, CLOCK_SRC_LORA, NULL));
     }
 
+    // Poisoning: one plausible future time used to block every later sync, across
+    // reboots. Only an authenticated owner may pull the clock back.
+    {
+        uint64_t future = 3786912000000ULL;              // 2090-01-01
+        assert(clock_apply_sync(future, 9000, CLOCK_SRC_BLE, NULL));
+        uint64_t real = BASE + 100 * H;
+        assert(!clock_apply_sync(real, 9100, CLOCK_SRC_BLE, NULL));      // untrusted: refused
+        assert(!clock_apply_sync(real, 9100, CLOCK_SRC_LORA, NULL));
+        assert(clock_apply_sync_trusted(real, 9200, CLOCK_SRC_BLE, NULL));
+        assert(clock_last_known() == real && clock_now(9200) == real);
+        clock_sample_t ring[CLOCK_RING_MAX];
+        assert(clock_get_ring(ring, CLOCK_RING_MAX) == 1);                // bogus samples dropped
+        assert(clock_apply_sync(real + H, 9300, CLOCK_SRC_LORA, NULL));   // normal again
+        assert(!clock_apply_sync_trusted(0, 9400, CLOCK_SRC_BLE, NULL));  // still validated
+        printf("test_clock: future poisoning recovered by a trusted sync OK\n");
+    }
+
     printf("test_clock: running clock + ring + validation + outage + AON resume OK\n");
     return 0;
 }

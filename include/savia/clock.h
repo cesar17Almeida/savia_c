@@ -69,6 +69,11 @@ uint64_t clock_last_sync_ms(void);
 bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
                       uint64_t *outage_ms);
 
+// Same, for an authenticated owner: may also move the clock backwards, discarding
+// the samples ahead of it, so one bogus future time cannot block every later sync.
+bool clock_apply_sync_trusted(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
+                              uint64_t *outage_ms);
+
 // Continue the clock after a deep sleep from the always-on timer that kept
 // counting while the core was off. Sets the running clock and the ring head
 // (source AON) like an accepted sync, but does NOT mark the ring dirty: it is a

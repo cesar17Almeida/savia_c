@@ -633,8 +633,10 @@ static void dispatch_write(uint16_t att_handle, const uint8_t *buffer, uint16_t 
         uint64_t ms;
         if (ble_parse_time_sync(buffer, buffer_size, &ms)) {
             uint64_t outage = 0;
-            if (clock_apply_sync(ms, to_ms_since_boot(get_absolute_time()),
-                                 CLOCK_SRC_BLE, &outage)) {
+            uint64_t up = to_ms_since_boot(get_absolute_time());
+            bool applied = g_authed ? clock_apply_sync_trusted(ms, up, CLOCK_SRC_BLE, &outage)
+                                    : clock_apply_sync(ms, up, CLOCK_SRC_BLE, &outage);
+            if (applied) {
                 LOG_INFO("BLE: time_sync -> %llu ms\n", (unsigned long long) ms);
                 if (outage >= CLOCK_OUTAGE_WARN_MS)
                     LOG_WARN("clock: board was powered off ~%llu min (BLE sync)\n",

@@ -51,17 +51,20 @@ uint8_t clock_get_ring(clock_sample_t *out, uint8_t max) {
     return n;
 }
 
-bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
-                      uint64_t *outage_ms) {
+static bool apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
+                       uint64_t *outage_ms, bool trusted) {
     if (outage_ms) *outage_ms = 0;
 
     // Absolute plausibility: a garbage downlink (0, 0xFFFFFFFF, ...) never lands.
     if (epoch_ms < CLOCK_EPOCH_MIN_MS || epoch_ms >= CLOCK_EPOCH_MAX_MS) return false;
 
     // Monotonic vs the last known-good, tolerating small cross-source jitter. Real
-    // time only moves forward; a larger backward jump is a bad reading -> reject.
+    // time only moves forward; a larger backward jump is a bad reading -> reject,
+    // unless an authenticated owner says so: then the history ahead of it is bogus.
     uint64_t lk = clock_last_known();
-    if (lk != 0 && epoch_ms + CLOCK_BACKWARD_SLACK_MS + s_uncertainty_ms < lk) return false;
+    bool backward = lk != 0 && epoch_ms + CLOCK_BACKWARD_SLACK_MS + s_uncertainty_ms < lk;
+    if (backward && !trusted) return false;
+    if (backward) s_count = 0;
 
     // Gap vs the previous known-good. On the first sync after a reboot this equals
     // the power-off duration (lk is the pre-outage reference seeded from flash).
@@ -77,6 +80,16 @@ bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t sour
     s_dirty = true;
     s_uncertainty_ms = 0;   // a real authority replaces the deep-sleep estimate
     return true;
+}
+
+bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
+                      uint64_t *outage_ms) {
+    return apply_sync(epoch_ms, uptime_ms, source, outage_ms, false);
+}
+
+bool clock_apply_sync_trusted(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
+                              uint64_t *outage_ms) {
+    return apply_sync(epoch_ms, uptime_ms, source, outage_ms, true);
 }
 
 bool clock_resume_from_aon(uint64_t epoch_ms, uint64_t uptime_ms, uint32_t uncertainty_ms) {
