@@ -1,6 +1,7 @@
 #include "savia/sensor.h"
 #include "savia/sensor_catalog.h"
 #include "savia/sdi12.h"
+#include "savia/pinmap.h"
 #include "savia/log.h"
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
@@ -145,6 +146,15 @@ static sdi12_console_result_t s_console;
 void sdi12_console_run(uint8_t gpio, const char *cmd) {
     strncpy(s_console.cmd, cmd, sizeof s_console.cmd - 1);
     s_console.cmd[sizeof s_console.cmd - 1] = '\0';
+    // The pin comes off the wire: past the header it would hit other registers, and
+    // GP23/24/25/29 belong to the radio. Answer with the refusal instead of driving it.
+    if (gpio >= SAVIA_GPIO_COUNT || pinmap_is_system_reserved(gpio)) {
+        snprintf(s_console.lines[0], SDI12_LINE_MAX, "GP%u no admite SDI-12", (unsigned) gpio);
+        s_console.count = 1;
+        s_console.seq++;
+        LOG_INFO("sdi12: console refused GP%u\n", (unsigned) gpio);
+        return;
+    }
     // The app has just written this command and is reading back the previous
     // result: let those notifications leave before interrupts go quiet for the
     // exchange, or the phone waits the whole capture for its acknowledgement.
