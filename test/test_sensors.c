@@ -4,6 +4,8 @@
 // config snapshot that carries the new per-type fields. Pure logic -- no Pico SDK,
 // no hardware, no Python (the patch is built in C with the same CBOR writer).
 #include <assert.h>
+#include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "savia/cbor.h"
@@ -309,6 +311,67 @@ int main(void) {
         assert(!old_cp.has_daily_min);                             // absent key -> not applied
         assert(old_cp.has_capture_s && old_cp.capture_s == 900);   // parser stayed in sync
         printf("test_sensors: retired field skipped, neighbours still applied\n");
+    }
+
+    // Out-of-range wire values must never wrap or truncate into a valid setting
+    // (found by fuzzing): an oversized integer rejects the patch, and a NaN or
+    // huge coordinate/offset maps to a sentinel the write path refuses.
+    {
+        uint8_t b[128];
+        cbor_writer_t w; cbor_w_init(&w, b, sizeof(b));
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "lat");            cbor_w_double(&w, NAN);
+        cbor_w_textz(&w, "lon");            cbor_w_double(&w, 9064.0);
+        cbor_w_textz(&w, "utc_offset_min"); cbor_w_uint(&w, 65596);   // 65536 + 60
+        assert(!w.overflow);
+        ble_config_patch_t lim;
+        assert(ble_parse_config_patch(b, w.len, &lim));
+        assert(lim.has_lat && lim.lat_e7 == INT32_MIN);
+        assert(lim.has_lon && lim.lon_e7 == INT32_MIN);
+        assert(lim.has_utc_offset && lim.utc_offset_min < SAVIA_UTC_OFFSET_MIN);
+
+        const char *keys[] = { "lora_tx", "daily_hour", "v" };
+        for (int i = 0; i < 3; i++) {
+            cbor_w_init(&w, b, sizeof(b));
+            cbor_w_map(&w, 1);
+            cbor_w_textz(&w, keys[i]); cbor_w_uint(&w, 272);           // 256 + 16
+            assert(!ble_parse_config_patch(b, w.len, &lim));
+        }
+        cbor_w_init(&w, b, sizeof(b));
+        cbor_w_map(&w, 1);
+        cbor_w_textz(&w, "sleep_s"); cbor_w_uint(&w, 4294967296ull + 600);
+        assert(!ble_parse_config_patch(b, w.len, &lim));
+
+        cbor_w_init(&w, b, sizeof(b));
+        cbor_w_map(&w, 1);
+        cbor_w_textz(&w, "sensors"); cbor_w_array(&w, 1);
+        cbor_w_map(&w, 2);
+        cbor_w_textz(&w, "gpio"); cbor_w_uint(&w, 258);                // 256 + 2
+        cbor_w_textz(&w, "type"); cbor_w_textz(&w, "sdi12_aquacheck");
+        assert(!w.overflow);
+        assert(!ble_parse_config_patch(b, w.len, &lim));
+
+        // An ingest point with an oversized depth is dropped; its neighbour still lands.
+        uint8_t ib[160];
+        cbor_w_init(&w, ib, sizeof(ib));
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "v");  cbor_w_uint(&w, 1);
+        cbor_w_textz(&w, "op"); cbor_w_textz(&w, "ingest");
+        cbor_w_textz(&w, "data"); cbor_w_array(&w, 2);
+        cbor_w_map(&w, 4);
+        cbor_w_textz(&w, "ts_ms"); cbor_w_uint(&w, 1700000000000ull);
+        cbor_w_textz(&w, "kind");  cbor_w_textz(&w, "soil_moisture");
+        cbor_w_textz(&w, "value"); cbor_w_double(&w, 0.31);
+        cbor_w_textz(&w, "depth_cm"); cbor_w_uint(&w, 300);
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "ts_ms"); cbor_w_uint(&w, 1700000060000ull);
+        cbor_w_textz(&w, "kind");  cbor_w_textz(&w, "soil_moisture");
+        cbor_w_textz(&w, "value"); cbor_w_double(&w, 0.32);
+        assert(!w.overflow);
+        savia_reading_t pts[4]; bool iok = false;
+        assert(ble_parse_ingest(ib, w.len, pts, 4, &iok) == 1 && iok);
+        assert(pts[0].ts_ms == 1700000060000ull);
+        printf("test_sensors: oversized and non-finite wire values rejected\n");
     }
 
     printf("test_sensors: OK\n");

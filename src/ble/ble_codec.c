@@ -5,7 +5,18 @@
 #include "savia/sensor_catalog.h"
 #include "savia/actuator.h"
 #include "savia/weather.h"
+#include <stdint.h>
 #include <string.h>
+
+// Unsigned wire field that must fit `max`; a larger value would wrap into a valid one.
+static bool read_uint_max(cbor_reader_t *r, uint64_t max, uint64_t *v) {
+    return cbor_r_uint(r, v) && *v <= max;
+}
+
+// Double -> int32 without UB: NaN or out-of-range yields INT32_MIN, which callers reject.
+static int32_t double_to_i32(double d) {
+    return (d > -2147483648.0 && d < 2147483648.0) ? (int32_t) d : INT32_MIN;
+}
 
 static const char *kind_str(uint8_t kind) {
     switch (kind) {
@@ -97,7 +108,7 @@ bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *
         if (!cbor_r_text(&r, &k, &kn)) return false;
 
         if (cbor_text_eq(k, kn, "v")) {
-            uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+            uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false;
             out->version = (int) v;
         } else if (cbor_text_eq(k, kn, "op")) {
             const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
@@ -121,12 +132,12 @@ bool ble_parse_data_request(const uint8_t *buf, size_t len, ble_data_request_t *
             }
         } else if (cbor_text_eq(k, kn, "gpio")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false;
                 out->gpio = (uint8_t) v; out->has_gpio = true;
             }
         } else if (cbor_text_eq(k, kn, "port")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false;
                 out->port = (uint8_t) v; out->has_port = true;
             }
         } else if (cbor_text_eq(k, kn, "on")) {
@@ -175,7 +186,7 @@ static bool parse_ingest_point(cbor_reader_t *r, savia_reading_t *rd) {
     memset(rd, 0, sizeof(*rd));
     rd->port = 1;                            // default logical port
     int kind = -1;
-    bool has_ts = false, has_value = false;
+    bool has_ts = false, has_value = false, bad = false;
     uint64_t fcount;
     if (!cbor_r_map(r, &fcount)) return false;
     for (uint64_t f = 0; ; f++) {
@@ -191,14 +202,20 @@ static bool parse_ingest_point(cbor_reader_t *r, savia_reading_t *rd) {
         } else if (cbor_text_eq(fk, fkn, "value")) {
             double d; if (!cbor_r_double(r, &d)) return false; rd->value = (float) d; has_value = true;
         } else if (cbor_text_eq(fk, fkn, "depth_cm")) {
-            if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; rd->depth_cm = (uint8_t) v; }
+            if (!cbor_r_null(r)) {
+                uint64_t v; if (!cbor_r_uint(r, &v)) return false;
+                if (v > UINT8_MAX) bad = true; else rd->depth_cm = (uint8_t) v;
+            }
         } else if (cbor_text_eq(fk, fkn, "port")) {
-            if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; rd->port = (uint8_t) v; }
+            if (!cbor_r_null(r)) {
+                uint64_t v; if (!cbor_r_uint(r, &v)) return false;
+                if (v > UINT8_MAX) bad = true; else rd->port = (uint8_t) v;
+            }
         } else {
             if (!cbor_r_skip(r)) return false;
         }
     }
-    if (kind < 0 || !has_ts || !has_value) return false;
+    if (bad || kind < 0 || !has_ts || !has_value) return false;
     rd->kind = (uint8_t) kind;
     return true;
 }
@@ -219,7 +236,7 @@ size_t ble_parse_ingest(const uint8_t *buf, size_t len,
         const char *k; size_t kn;
         if (!cbor_r_text(&r, &k, &kn)) return 0;
         if (cbor_text_eq(k, kn, "v")) {
-            uint64_t v; if (!cbor_r_uint(&r, &v)) return 0; ver = (int) v;
+            uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return 0; ver = (int) v;
         } else if (cbor_text_eq(k, kn, "data")) {
             uint64_t acount;
             if (!cbor_r_array(&r, &acount)) return 0;
@@ -366,7 +383,7 @@ bool ble_parse_time_sync(const uint8_t *buf, size_t len, uint64_t *ms_out) {
         const char *k; size_t kn;
         if (!cbor_r_text(&r, &k, &kn)) return false;
         if (cbor_text_eq(k, kn, "v")) {
-            uint64_t v; if (!cbor_r_uint(&r, &v)) return false; ver = (int) v;
+            uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false; ver = (int) v;
         } else if (cbor_text_eq(k, kn, "op")) {
             const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
             ok_op = cbor_text_eq(s, sn, "set");
@@ -394,7 +411,7 @@ bool ble_parse_weather(const uint8_t *buf, size_t len, float *past_ta, uint8_t *
         const char *k; size_t kn;
         if (!cbor_r_text(&r, &k, &kn)) return false;
         if (cbor_text_eq(k, kn, "v")) {
-            uint64_t v; if (!cbor_r_uint(&r, &v)) return false; ver = (int) v;
+            uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false; ver = (int) v;
         } else if (cbor_text_eq(k, kn, "op")) {
             const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
             ok_op = cbor_text_eq(s, sn, "upd");
@@ -616,12 +633,12 @@ static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot, uint8
         const char *fk; size_t fkn;
         if (!cbor_r_text(r, &fk, &fkn)) return false;
         if (cbor_text_eq(fk, fkn, "port")) {
-            if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; *port_out = (uint8_t) v; }
+            if (!cbor_r_null(r)) { uint64_t v; if (!read_uint_max(r, UINT8_MAX, &v)) return false; *port_out = (uint8_t) v; }
         } else if (cbor_text_eq(fk, fkn, "gpio")) {
-            uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->gpio = (uint8_t) v;
+            uint64_t v; if (!read_uint_max(r, UINT8_MAX, &v)) return false; slot->gpio = (uint8_t) v;
         } else if (cbor_text_eq(fk, fkn, "gpio2")) {
             if (!cbor_r_null(r)) {          // null/absent -> stays SAVIA_GPIO_NONE
-                uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->gpio2 = (uint8_t) v;
+                uint64_t v; if (!read_uint_max(r, UINT8_MAX, &v)) return false; slot->gpio2 = (uint8_t) v;
             }
         } else if (cbor_text_eq(fk, fkn, "unit")) {
             if (!cbor_r_null(r)) {
@@ -640,9 +657,9 @@ static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot, uint8
             int k = kind_from_str(s, sn);
             if (k >= 0) { slot->kind = (uint8_t) k; has_kind = true; }
         } else if (cbor_text_eq(fk, fkn, "depth_cm")) {
-            if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->depth_cm = (uint8_t) v; }
+            if (!cbor_r_null(r)) { uint64_t v; if (!read_uint_max(r, UINT8_MAX, &v)) return false; slot->depth_cm = (uint8_t) v; }
         } else if (cbor_text_eq(fk, fkn, "interval_s")) {
-            if (!cbor_r_null(r)) { uint64_t v; if (!cbor_r_uint(r, &v)) return false; slot->sample_interval_s = (uint32_t) v; }
+            if (!cbor_r_null(r)) { uint64_t v; if (!read_uint_max(r, UINT32_MAX, &v)) return false; slot->sample_interval_s = (uint32_t) v; }
         } else if (cbor_text_eq(fk, fkn, "scale")) {
             double d; if (!cbor_r_double(r, &d)) return false; a_scale = (float) d;
         } else if (cbor_text_eq(fk, fkn, "offset")) {
@@ -665,7 +682,7 @@ static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot, uint8
                         const char *s; size_t sn; if (!cbor_r_text(r, &s, &sn)) return false;
                         int k = kind_from_str(s, sn); if (k >= 0) ch.kind = (uint8_t) k;
                     } else if (cbor_text_eq(ck, ckn, "depth_cm")) {
-                        uint64_t v; if (!cbor_r_uint(r, &v)) return false; ch.depth_cm = (uint8_t) v;
+                        uint64_t v; if (!read_uint_max(r, UINT8_MAX, &v)) return false; ch.depth_cm = (uint8_t) v;
                     } else if (!cbor_r_skip(r)) return false;
                 }
                 if (chan_count < SAVIA_SDI12_MAX_CHANNELS) chans[chan_count++] = ch;  // extras dropped
@@ -700,7 +717,7 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
         const char *k; size_t kn;
         if (!cbor_r_text(&r, &k, &kn)) return false;
         if (cbor_text_eq(k, kn, "v")) {
-            uint64_t v; if (!cbor_r_uint(&r, &v)) return false; out->version = (int) v;
+            uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false; out->version = (int) v;
         } else if (cbor_text_eq(k, kn, "op")) {
             const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
             if (sn >= sizeof(out->op)) sn = sizeof(out->op) - 1;
@@ -713,7 +730,7 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
             }
         } else if (cbor_text_eq(k, kn, "sleep_s")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT32_MAX, &v)) return false;
                 out->sleep_s = (uint32_t) v; out->has_sleep_s = true;
             }
         } else if (cbor_text_eq(k, kn, "deep_sleep")) {
@@ -722,17 +739,17 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
             else if (!cbor_r_skip(&r)) return false;   // null/other -> ignore
         } else if (cbor_text_eq(k, kn, "capture_s")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT32_MAX, &v)) return false;
                 out->capture_s = (uint32_t) v; out->has_capture_s = true;
             }
         } else if (cbor_text_eq(k, kn, "daily_hour")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false;
                 out->daily_hour = (uint8_t) v; out->has_daily_hour = true;
             }
         } else if (cbor_text_eq(k, kn, "daily_min")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false;
                 out->daily_min = (uint8_t) v; out->has_daily_min = true;
             }
         } else if (cbor_text_eq(k, kn, "mock")) {
@@ -741,12 +758,12 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
             else if (!cbor_r_skip(&r)) return false;
         } else if (cbor_text_eq(k, kn, "log_level")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false;
                 out->log_level = (uint8_t) v; out->has_log_level = true;
             }
         } else if (cbor_text_eq(k, kn, "lora_period_s")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT32_MAX, &v)) return false;
                 out->lora_period_s = (uint32_t) v; out->has_lora_period_s = true;
             }
         } else if (cbor_text_eq(k, kn, "lora")) {
@@ -755,12 +772,12 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
             else if (!cbor_r_skip(&r)) return false;
         } else if (cbor_text_eq(k, kn, "lora_tx")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false;
                 out->lora_tx = (uint8_t) v; out->has_lora_tx = true;
             }
         } else if (cbor_text_eq(k, kn, "lora_rx")) {
             if (!cbor_r_null(&r)) {
-                uint64_t v; if (!cbor_r_uint(&r, &v)) return false;
+                uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false;
                 out->lora_rx = (uint8_t) v; out->has_lora_rx = true;
             }
         } else if (cbor_text_eq(k, kn, "inference_mode")) {
@@ -773,21 +790,23 @@ bool ble_parse_config_patch(const uint8_t *buf, size_t len, ble_config_patch_t *
         } else if (cbor_text_eq(k, kn, "utc_offset_min")) {
             if (!cbor_r_null(&r)) {
                 double d; if (!cbor_r_double(&r, &d)) return false;   // accepts negint
-                out->utc_offset_min = (int16_t) d; out->has_utc_offset = true;
+                int32_t v = double_to_i32(d);             // out of int16 -> rejected later
+                out->utc_offset_min = (v >= INT16_MIN && v <= INT16_MAX) ? (int16_t) v : INT16_MIN;
+                out->has_utc_offset = true;
             }
         } else if (cbor_text_eq(k, kn, "lat")) {
             out->has_lat = true;
             if (cbor_r_null(&r)) out->lat_null = true;
             else {
                 double d; if (!cbor_r_double(&r, &d)) return false;
-                out->lat_e7 = (int32_t)(d * 1e7 + (d >= 0 ? 0.5 : -0.5));
+                out->lat_e7 = double_to_i32(d * 1e7 + (d >= 0 ? 0.5 : -0.5));
             }
         } else if (cbor_text_eq(k, kn, "lon")) {
             out->has_lon = true;
             if (cbor_r_null(&r)) out->lon_null = true;
             else {
                 double d; if (!cbor_r_double(&r, &d)) return false;
-                out->lon_e7 = (int32_t)(d * 1e7 + (d >= 0 ? 0.5 : -0.5));
+                out->lon_e7 = double_to_i32(d * 1e7 + (d >= 0 ? 0.5 : -0.5));
             }
         } else if (cbor_text_eq(k, kn, "sensors")) {
             if (!cbor_r_null(&r)) {                       // null -> leave slots untouched
@@ -872,7 +891,7 @@ bool ble_parse_auth(const uint8_t *buf, size_t len, ble_auth_msg_t *out) {
         const char *k; size_t kn;
         if (!cbor_r_text(&r, &k, &kn)) return false;
         if (cbor_text_eq(k, kn, "v")) {
-            uint64_t v; if (!cbor_r_uint(&r, &v)) return false; out->version = (int) v;
+            uint64_t v; if (!read_uint_max(&r, UINT8_MAX, &v)) return false; out->version = (int) v;
         } else if (cbor_text_eq(k, kn, "op")) {
             const char *s; size_t sn; if (!cbor_r_text(&r, &s, &sn)) return false;
             if (sn >= sizeof(out->op)) sn = sizeof(out->op) - 1;
