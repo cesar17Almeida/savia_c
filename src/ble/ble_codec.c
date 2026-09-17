@@ -287,6 +287,16 @@ size_t ble_serialize_aggregations(const savia_aggregate_t *rows, size_t n,
     return w.overflow ? 0 : w.len;
 }
 
+size_t ble_serialize_aggregations_fit(const savia_aggregate_t *rows, size_t n,
+                                      uint8_t *out, size_t cap) {
+    size_t skip = 0;
+    for (;;) {
+        size_t len = ble_serialize_aggregations(rows + skip, n - skip, out, cap);
+        if (len != 0 || skip >= n) return len;
+        skip += (n - skip) / 8 + 1;         // drop the oldest rows until the rest fits
+    }
+}
+
 size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
                                  uint8_t *out, size_t cap) {
     cbor_writer_t w;

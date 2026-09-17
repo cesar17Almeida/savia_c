@@ -408,6 +408,29 @@ int main(void) {
         printf("test_sensors: hostile CBOR lengths rejected\n");
     }
 
+    // agg replies: past ~121 rows the 12 KB answer used to come back EMPTY; now the
+    // newest rows that fit are served.
+    {
+        static savia_aggregate_t many[160];
+        for (int i = 0; i < 160; i++) {
+            many[i] = (savia_aggregate_t){ .hour_ms = 1700000000000ull + (uint64_t) i * 3600000ull,
+                .port = 1, .kind = READING_SOIL_MOISTURE, .depth_cm = 10, .count = 6,
+                .mean = 0.31f, .min = 0.30f, .max = 0.32f };
+        }
+        static uint8_t resp[12288];
+        assert(ble_serialize_aggregations(many, 160, resp, sizeof resp) == 0);
+        size_t len = ble_serialize_aggregations_fit(many, 160, resp, sizeof resp);
+        assert(len > 0 && len <= sizeof resp);
+        cbor_reader_t ar; cbor_r_init(&ar, resp, len);
+        uint64_t rows = 0;
+        assert(cbor_r_array(&ar, &rows) && rows > 100 && rows < 160);
+        uint64_t mc = 0; assert(cbor_r_map(&ar, &mc));
+        const char *k; size_t kn; assert(cbor_r_text(&ar, &k, &kn) && cbor_text_eq(k, kn, "hour_ms"));
+        uint64_t first = 0; assert(cbor_r_uint(&ar, &first));
+        assert(first == 1700000000000ull + (160 - rows) * 3600000ull);   // oldest ones dropped
+        printf("test_sensors: agg reply keeps the newest rows that fit\n");
+    }
+
     printf("test_sensors: OK\n");
     return 0;
 }

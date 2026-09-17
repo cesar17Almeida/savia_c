@@ -19,6 +19,9 @@ size_t ble_serialize_readings(const savia_reading_t *rows, size_t n,
                               uint8_t *out, size_t cap);   // [{ts_ms,port,kind,value,depth_cm}]
 size_t ble_serialize_aggregations(const savia_aggregate_t *rows, size_t n,
                                   uint8_t *out, size_t cap); // [{hour_ms,port,kind,count,mean,min,max,depth_cm}]
+// Same, keeping the newest rows that fit `cap` instead of failing when they don't.
+size_t ble_serialize_aggregations_fit(const savia_aggregate_t *rows, size_t n,
+                                      uint8_t *out, size_t cap);
 size_t ble_serialize_predictions(const savia_prediction_t *rows, size_t n,
                                  uint8_t *out, size_t cap);  // [{ts_ms,model,kind,port,value,confidence}]
 // `factory` = running never-saved defaults (a fresh board; see config_store_is_factory).

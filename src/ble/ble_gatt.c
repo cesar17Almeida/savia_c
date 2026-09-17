@@ -334,7 +334,7 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
             g_resp_len = ble_serialize_readings(q_rd, n, g_resp, sizeof(g_resp));
         } else if (strcmp(dr.kind, SAVIA_KIND_AGG) == 0) {
             size_t n = storage_aggregate_hourly(from, to, lim, q_agg, sizeof(q_agg) / sizeof(q_agg[0]));
-            g_resp_len = ble_serialize_aggregations(q_agg, n, g_resp, sizeof(g_resp));
+            g_resp_len = ble_serialize_aggregations_fit(q_agg, n, g_resp, sizeof(g_resp));
         } else if (strcmp(dr.kind, SAVIA_KIND_PRED) == 0) {
             size_t n = storage_query_pred(from, to, lim, q_pred, sizeof(q_pred) / sizeof(q_pred[0]));
             g_resp_len = ble_serialize_predictions(q_pred, n, g_resp, sizeof(g_resp));

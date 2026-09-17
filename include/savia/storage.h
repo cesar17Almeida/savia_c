@@ -82,7 +82,8 @@ size_t storage_query_raw(uint64_t from_ms, uint64_t to_ms, size_t limit,
                          savia_reading_t *out, size_t out_cap);
 size_t storage_count_raw(uint64_t from_ms, uint64_t to_ms);
 
-// Hourly aggregates grouped by (hour, port, kind, depth_cm).
+// Hourly aggregates grouped by (hour, port, kind, depth_cm); when `out` fills up the
+// oldest buckets give way, so the newest hours are always kept.
 size_t storage_aggregate_hourly(uint64_t from_ms, uint64_t to_ms, size_t limit,
                                 savia_aggregate_t *out, size_t out_cap);
 

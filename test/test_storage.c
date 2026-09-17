@@ -154,6 +154,19 @@ int main(void) {
     assert(storage_rebase_provisional(delta) == 0);                    // idempotent: nothing left to fix
     printf("test_storage: provisional back-fill OK\n");
 
+    // A full output keeps the NEWEST hours: 30 hourly buckets into room for 8.
+    storage_init();
+    for (int hh = 0; hh < 30; hh++) {
+        savia_reading_t w = { .ts_ms = hour0 + (uint64_t) hh * 3600000ULL + 1000, .port = 1,
+                              .depth_cm = 10, .kind = READING_SOIL_MOISTURE, .value = (float) hh };
+        storage_append_reading(&w);
+    }
+    savia_aggregate_t win[8];
+    assert(storage_aggregate_hourly(0, UINT64_MAX, 0, win, 8) == 8);
+    assert(win[0].hour_ms == hour0 + 22 * 3600000ULL && win[7].hour_ms == hour0 + 29 * 3600000ULL);
+    assert(win[7].count == 1 && win[7].mean == 29.0f);
+    printf("test_storage: full aggregate keeps the newest hours OK\n");
+
     printf("test_storage: OK\n");
     return 0;
 }

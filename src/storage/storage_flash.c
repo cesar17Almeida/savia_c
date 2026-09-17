@@ -168,7 +168,11 @@ static size_t aggregate(uint64_t from_ms, uint64_t to_ms, size_t eff,
             }
         }
         if (b == n) {                       // new bucket
-            if (n >= eff) continue;         // no room; drop (rare for mock)
+            if (eff == 0) continue;
+            if (n >= eff) {                 // full: the ring is oldest-first, so evict
+                memmove(out, out + 1, (n - 1) * sizeof *out);   // the oldest bucket
+                b = --n;
+            }
             out[n].hour_ms = hour;
             out[n].port = r->port;
             out[n].kind = r->kind;
