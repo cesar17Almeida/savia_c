@@ -37,6 +37,11 @@ make clean
 Para la otra placa o variantes: `make build BOARD=pico2_w INFER=ON` (Pico 2 W con
 LSTM on-device), o `make build BLE=OFF` (build mínimo sin radio).
 
+Para desarrollo, `make build MOCK=ON` sustituye la sonda por una réplica de humedad
+real (HS10/HS30 del dataset del LSTM: 48 h hacia atrás y 24 h hacia delante), con lo
+que la estación puede inferir en cuanto recibe la temperatura del aire. Detalle en
+[`docs/BUILD.md`](docs/BUILD.md#build-mock-humedad-simulada-con-datos-reales-desarrollo).
+
 > **BLE va ON por defecto** (la app lo necesita para conectar). Ya no hace falta
 > pasar ningún flag; solo `make build`. Se puede desactivar con `BLE=OFF`.
 

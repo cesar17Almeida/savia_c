@@ -49,6 +49,51 @@ ninja -C build-pico2_w
 # -> build-pico2_w/savia_c-pico2_w-mlondevice.uf2
 ```
 
+## Build MOCK: humedad simulada con datos reales (desarrollo)
+
+`make build MOCK=ON` (o `make flash MOCK=ON`, en cualquier placa) genera una imagen de
+desarrollo cuya sonda es una **réplica de humedad medida**: HS10 y HS30 del nodo 4 de
+`dataset_master_hourly.csv`, del 1 al 29 de septiembre de 2020 (año que el LSTM no vio al
+entrenar). El binario lleva el sufijo `-mock` (`savia_c-pico2_w-mlondevice-mock.uf2`).
+`make build --mock` no es posible: `make` trata cualquier `--xxx` como opción propia y
+aborta con `unrecognized option`.
+
+- **Sólo humedad**, en el puerto 1. La temperatura del aire no se simula: llega como en
+  campo, por el downlink LoRa (Open-Meteo del backend) o por la característica BLE
+  `weather`. Sin ella la inferencia se niega con «no air-temperature forecast cached».
+- **48 h hacia atrás + 24 h hacia delante.** En cuanto hay hora (LoRa o `time_sync` BLE)
+  la estación completa las 48 h que necesita el LSTM, terminando en la hora en curso, y
+  las 24 h siguientes, que son el «real» con el que se puntúa el pronóstico («Predicción
+  vs real»). Cada ciclo añade la hora nueva; la inferencia bajo demanda rellena antes de
+  correr.
+- **Determinista.** El valor de una hora depende sólo de su hora local
+  (`utc_offset_min`): el ritmo del dataset (riegos hacia las 10–11 h) cae en las mismas
+  horas locales, y un reinicio reconstruye exactamente los mismos datos. Los 29 días se
+  repiten en bucle. Una hora que ya tiene lectura (p. ej. un `ingest` de la app) se respeta.
+- **No mezcla réplica y medidas.** Al arrancar una imagen MOCK en una placa que venía de
+  una imagen normal se vacía el anillo, y la app no puede apagar el mock (`config_err`
+  «mock build: reflash without MOCK»). En un build normal, activar o desactivar el mock
+  desde TerraLink también vacía el anillo.
+- **Auto-test al arrancar** (sólo Pico 2 W): corre el LSTM sobre una ventana real embebida
+  (con su propia TA) y deja en los logs la desviación frente a la predicción del host con
+  el mismo modelo y el MAE frente al HS30 medido (`selftest: ...`).
+- **Coste:** ~7 KB de flash (la réplica la usan también los builds normales, para el mock
+  de TerraLink); RAM sin cambios.
+
+> ⚠️ No es para producción: con LoRa activo en modo FORWARD, la réplica sube al backend
+> como si la hubiera medido la sonda.
+
+Los datos están en `include/savia/mock_soil_data.h`, generado por
+`tools/gen_mock_soil.py` (otro tramo, o si cambia el modelo embebido):
+
+```sh
+../../.venv-tflite/bin/python tools/gen_mock_soil.py --start "2020-09-01 00:00" --days 29
+```
+
+La predicción de referencia del host usa los bytes del modelo embebido, el mismo escalado
+en float32 y la misma cuantización que el firmware, con los kernels de TFLite **sin**
+XNNPACK: con XNNPACK la salida int8 de este modelo se mueve hasta 0,005.
+
 ## Flashear
 
 Mantener pulsado **BOOTSEL**, conectar el USB, y arrastrar el `.uf2` a la unidad

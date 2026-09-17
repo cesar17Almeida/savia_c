@@ -10,6 +10,7 @@
 # Variables (sobreescribibles):
 #   make build BOARD=pico_w INFER=OFF    # Pico W (RP2040): sin LSTM on-device
 #   make build BLE=OFF                   # build mínimo sin radio
+#   make build MOCK=ON                   # dev: soil moisture replayed from the real dataset
 #
 # Compilar necesita PICO_SDK_PATH + arm-none-eabi-gcc (ver tools/setup_pico_sdk.sh);
 # `make test` no necesita nada de eso.
@@ -21,6 +22,10 @@ BLE ?= ON
 # LSTM on-device por defecto (disponible en la app); ON solo cabe en pico2_w (RP2350).
 # Para la Pico W (RP2040): make build BOARD=pico_w INFER=OFF
 INFER ?= ON
+# Dev image: the probe is replaced by the dataset replay, 48 h back + 24 h ahead
+# (never for production). make can't take "--mock": its options are its own.
+MOCK ?= OFF
+override MOCK := $(if $(filter ON on 1 YES yes TRUE true,$(MOCK)),ON,OFF)
 
 # Credenciales OTAA locales (ver .env.example). Fichero ignorado por git: si no
 # existe, las variables quedan vacias y el firmware usa placeholders a cero.
@@ -37,7 +42,17 @@ PICO_TOOLCHAIN_PATH ?= $(lastword $(sort $(wildcard \
 
 BUILD := build-$(BOARD)
 INFER_TAG := $(if $(filter ON,$(INFER)),on,off)
-UF2 := $(BUILD)/savia_c-$(BOARD)-ml$(INFER_TAG)device.uf2
+MOCK_TAG := $(if $(filter ON,$(MOCK)),-mock)
+UF2 := $(BUILD)/savia_c-$(BOARD)-ml$(INFER_TAG)device$(MOCK_TAG).uf2
+
+# What the flash warning says about mock data (one quoted shell word per line).
+ifeq ($(MOCK),ON)
+FLASH_MOCK_NOTE := "* build MOCK: la humedad es una réplica del dataset real" \
+  "  (48 h atrás + 24 h adelante); no lee la sonda y no se apaga desde la app" \
+  "* no es para producción: con LoRa en FORWARD la réplica sube al backend"
+else
+FLASH_MOCK_NOTE := "* mock: conserva el valor guardado (de fábrica OFF; se cambia desde TerraLink)"
+endif
 
 .DEFAULT_GOAL := build
 .PHONY: build flash test clean help
@@ -56,6 +71,7 @@ build:
 	  -DPICO_SDK_PATH=$(PICO_SDK_PATH) \
 	  $(if $(PICO_TOOLCHAIN_PATH),-DPICO_TOOLCHAIN_PATH=$(PICO_TOOLCHAIN_PATH)) \
 	  -DPICO_BOARD=$(BOARD) -DSAVIA_ENABLE_BLE=$(BLE) -DSAVIA_ON_DEVICE_INFERENCE=$(INFER) \
+	  -DSAVIA_MOCK_DATA=$(MOCK) \
 	  -DSAVIA_LORA_DEV_EUI=$(LORA_DEV_EUI) \
 	  -DSAVIA_LORA_APP_EUI=$(LORA_APP_EUI) \
 	  -DSAVIA_LORA_APP_KEY=$(LORA_APP_KEY)
@@ -76,7 +92,7 @@ flash: build
 	echo "     * las lecturas almacenadas se PIERDEN (viven en RAM)"; \
 	echo "     * la config guardada (clave BLE, coords, pines, LoRa) se RESETEA a"; \
 	echo "       los valores por defecto (salvo mismo layout/versión de firmware)"; \
-	echo "     * mock arranca OFF; sólo TerraLink puede reactivarlo"; \
+	for line in $(FLASH_MOCK_NOTE); do echo "     $$line"; done; \
 	echo ""; \
 	if [ "$(YES)" != "1" ]; then \
 	  printf "  Escribe 'y' para continuar [y/N]: "; read ans; \
