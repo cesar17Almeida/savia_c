@@ -3,6 +3,7 @@
 #include "savia/storage.h"
 #include "savia/types.h"
 #include "savia/log.h"
+#include "savia/ble_lock.h"
 #include <string.h>
 
 // This file is the ONE place the two boards diverge. The build flag
@@ -47,6 +48,7 @@ int inference_run_daily(uint64_t now_ms) {
     // is what the LoRa uplink / the downstream watering decision cares about.
     uint64_t latest_hour = now_ms - (now_ms % HOUR_MS);
     float min = hs30[0];
+    savia_ble_lock();                                  // BLE serves and mocks this store
     storage_clear_predictions();                       // fresh curve replaces yesterday's
     for (size_t t = 0; t < LSTM_OUTPUT_STEPS; t++) {
         if (hs30[t] < min) min = hs30[t];
@@ -58,6 +60,7 @@ int inference_run_daily(uint64_t now_ms) {
         p.value = hs30[t];
         storage_append_prediction(&p);
     }
+    savia_ble_unlock();
     LOG_INFO("inference: HS30 24h forecast stored (min=%.3f)\n", (double) min);
     return 0;
 }

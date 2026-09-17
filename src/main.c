@@ -9,6 +9,7 @@
 #include "pico/stdlib.h"
 #if SAVIA_ENABLE_BLE
 #include "pico/cyw43_arch.h"      // cyw43_arch_lwip_begin/end == async_context lock
+#include "savia/ble_lock.h"
 #endif
 
 #include "savia/config.h"
@@ -73,16 +74,9 @@ static void seed_mock_readings(void) {
 // BTstack (incl. handle_config_write's `*g_cfg = next`) runs under the cyw43
 // async_context lock; holding it here makes the ~196 B cfg copy atomic vs the
 // supervisor, preventing torn reads of cfg.sensors[i]. No-op when BLE is off.
-static inline void cfg_lock(void) {
-#if SAVIA_ENABLE_BLE
-    cyw43_arch_lwip_begin();
-#endif
-}
-static inline void cfg_unlock(void) {
-#if SAVIA_ENABLE_BLE
-    cyw43_arch_lwip_end();
-#endif
-}
+// The same lock guards the readings ring: ingest/clear/mock run in BLE context.
+static inline void cfg_lock(void)   { savia_ble_lock(); }
+static inline void cfg_unlock(void) { savia_ble_unlock(); }
 
 // Persist the latest LoRa downlink signal into cfg (survives reboot) if it
 // advanced. Snapshots under the lock so the flash write isn't torn by a BLE write.
@@ -156,12 +150,14 @@ static void capture_slots(const station_config_t *cfg, uint8_t mask, uint64_t no
         if (!savia_slot_used(&cfg->sensors[i])) continue;   // free slot
         if (!(mask & (1u << i))) continue;                  // not due this tick
         savia_reading_t buf[8];
-        int n = sensor_measure(&cfg->sensors[i], buf, 8);
+        int n = sensor_measure(&cfg->sensors[i], buf, 8);   // slow: outside the lock
+        cfg_lock();
         for (int k = 0; k < n; k++) {
             buf[k].ts_ms = now_ms;
             buf[k].port = (uint8_t)(i + 1);   // slot index -> logical port
             storage_append_reading(&buf[k]);
         }
+        cfg_unlock();
     }
 }
 
@@ -338,7 +334,9 @@ int main(void) {
         // First sync this power cycle: rebase provisional (uptime-stamped) readings
         // to wall time. delta = epoch - uptime, constant for the whole power cycle.
         if (timed && !was_timed) {
+            cfg_lock();
             size_t fixed = storage_rebase_provisional(clock_now(up) - up);
+            cfg_unlock();
             if (fixed) LOG_INFO("storage: back-filled %u provisional readings\n",
                                 (unsigned) fixed);
             was_timed = true;
@@ -366,7 +364,10 @@ int main(void) {
 
         // Sync mock state if the app toggled it (re-seed the dataset on enable).
         if (live.mock_enabled && !mock_seeded) {
-            storage_clear(); seed_mock_readings(); mock_seeded = true;
+            cfg_lock();
+            storage_clear(); seed_mock_readings();
+            cfg_unlock();
+            mock_seeded = true;
         } else if (!live.mock_enabled && mock_seeded) {
             mock_seeded = false;
         }
@@ -381,8 +382,10 @@ int main(void) {
                                         .kind = READING_SOIL_MOISTURE, .value = 0.74f };
                 // Soil only, for the reason in seed_mock_readings: a mock air
                 // temperature on port 1 would masquerade as a reading of the probe.
+                cfg_lock();
                 storage_append_reading(&r10);
                 storage_append_reading(&r30);
+                cfg_unlock();
             } else {
                 capture_slots(&live, act.capture_mask, now_ms);
             }
