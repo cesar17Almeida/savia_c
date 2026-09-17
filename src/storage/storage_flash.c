@@ -251,18 +251,23 @@ size_t storage_restore(const uint8_t *data, size_t len) {
     // history with a hole in it, which is worse than starting empty.
     if (n > READINGS_CAP) return 0;
     if (len < (size_t) 2 + (size_t) n * SAVIA_READING_WIRE_BYTES) return 0;
+    size_t kept = 0;
     for (uint16_t i = 0; i < n; i++) {
         const uint8_t *p = data + 2 + (size_t) i * SAVIA_READING_WIRE_BYTES;
-        s_rd[i].ts_ms    = rd_u64_le(p);
-        s_rd[i].port     = p[8];
-        s_rd[i].depth_cm = p[9];
-        s_rd[i].kind     = p[10];
-        s_rd[i].value    = rd_f32_le(p + 11);
+        uint64_t ts = rd_u64_le(p);
+        // An uptime stamp from an earlier power cycle can never be rebased correctly.
+        if (ts < SAVIA_TS_PROVISIONAL_MAX) continue;
+        s_rd[kept].ts_ms    = ts;
+        s_rd[kept].port     = p[8];
+        s_rd[kept].depth_cm = p[9];
+        s_rd[kept].kind     = p[10];
+        s_rd[kept].value    = rd_f32_le(p + 11);
+        kept++;
     }
-    s_rd_count = n;
-    s_rd_head  = (size_t) n % READINGS_CAP;
-    s_dirty    = false;      // just loaded: identical to what is in flash
-    return n;
+    s_rd_count = kept;
+    s_rd_head  = kept % READINGS_CAP;
+    s_dirty    = kept != n;  // identical to flash unless provisional rows were dropped
+    return kept;
 }
 
 // --- predictions ------------------------------------------------------------

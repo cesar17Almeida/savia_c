@@ -49,7 +49,7 @@ size_t storage_serialize(uint8_t *out, size_t cap);
 
 /** Replace the ring with a serialized image. Rejects a malformed or over-long
  *  blob rather than loading half of it. Returns how many readings were restored. */
-size_t storage_restore(const uint8_t *data, size_t len);
+size_t storage_restore(const uint8_t *data, size_t len);   // drops provisional rows
 
 /** True once (and clears) if the ring changed since the last call. Lets the
  *  supervisor skip a flash write when nothing new was captured. */

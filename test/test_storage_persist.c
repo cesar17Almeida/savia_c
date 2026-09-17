@@ -164,8 +164,33 @@ static void test_weather_window_roundtrip_and_staleness(void) {
     printf("test_storage_persist: TA window round-trip + staleness OK\n");
 }
 
+// Provisional stamps are uptime from the power cycle that took them. After a reboot
+// the next first sync would shift them by THIS cycle's offset, so they are dropped.
+static void test_restore_drops_previous_cycle_provisional(void) {
+    storage_init();
+    const uint64_t base = 1787616000000ULL;
+    savia_reading_t real1 = mk(base, 1, 10, 0.5f);
+    savia_reading_t prov1 = mk(45000, 1, 10, 0.6f);          // 45 s after an old boot
+    savia_reading_t prov2 = mk(3645000, 1, 30, 0.7f);
+    savia_reading_t real2 = mk(base + HOUR_MS, 1, 30, 0.8f);
+    storage_append_reading(&real1);
+    storage_append_reading(&prov1);
+    storage_append_reading(&prov2);
+    storage_append_reading(&real2);
+    static uint8_t blob[SAVIA_STORAGE_BLOB_MAX];
+    size_t n = storage_serialize(blob, sizeof blob);
+
+    storage_init();                                          // "reboot"
+    assert(storage_restore(blob, n) == 2);
+    assert(storage_take_dirty());                            // flash copy is now stale
+    assert(storage_reading_at(0)->ts_ms == base);
+    assert(storage_reading_at(1)->ts_ms == base + HOUR_MS);
+    assert(storage_rebase_provisional(3600000ULL) == 0);     // nothing left to shift
+}
+
 int main(void) {
     test_roundtrip();
+    test_restore_drops_previous_cycle_provisional();
     test_wrapped_ring_keeps_fifo_order();
     test_malformed_blobs_are_refused_whole();
     test_dirty_tracks_every_mutation();
