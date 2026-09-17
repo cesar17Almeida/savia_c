@@ -130,6 +130,10 @@ endif()
 if(SAVIA_ENABLE_BLE)
   # CYW43_LWIP=0: BLE-only, sin WiFi/lwIP (evita el include de lwip/netif.h).
   target_compile_definitions(savia_c PRIVATE SAVIA_ENABLE_BLE=1 CYW43_LWIP=0)
+  # BTstack's key bank defaults to the top of flash, where savia keeps config, clock
+  # and readings (top 8 sectors): place its two sectors right below them.
+  target_compile_definitions(savia_c PRIVATE
+    "PICO_FLASH_BANK_STORAGE_OFFSET=(PICO_FLASH_SIZE_BYTES-10*FLASH_SECTOR_SIZE)")
   # Genera el ATT DB (savia_ble.h) desde el .gatt (mismo contrato que savia_py).
   pico_btstack_make_gatt_header(savia_c PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src/ble/savia_ble.gatt)
   target_link_libraries(savia_c

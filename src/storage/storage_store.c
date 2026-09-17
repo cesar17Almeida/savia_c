@@ -60,6 +60,13 @@
 _Static_assert(STORE_MAX_BYTES <= STORE_BANK_BYTES, "state record exceeds one bank");
 _Static_assert(STORE_BANK_A + STORE_BANK_BYTES <= PICO_FLASH_SIZE_BYTES - 2 * FLASH_SECTOR_SIZE,
                "bank A overlaps the clock/config sectors");
+
+#if SAVIA_ENABLE_BLE
+// BTstack erases and rewrites its own two-sector bank; it must stay below savia's.
+#include "pico/btstack_flash_bank.h"
+_Static_assert(PICO_FLASH_BANK_STORAGE_OFFSET + PICO_FLASH_BANK_TOTAL_SIZE <= STORE_BANK_B,
+               "BTstack flash bank overlaps savia's flash records");
+#endif
 _Static_assert(STORE_BANK_B + STORE_BANK_BYTES <= STORE_BANK_A, "bank B overlaps bank A");
 
 // Which bank holds the newest image, and its sequence number. Both are learned
