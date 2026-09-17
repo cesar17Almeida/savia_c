@@ -33,6 +33,11 @@ int inference_run(const float *past48x3, const float *future24x1, float *out24);
 // No-op returning <0 on off-device builds (the app runs the model there).
 int inference_run_daily(uint64_t now_ms);
 
+// Dev: run the model over the mock replay's embedded window and log how the board
+// compares with the host forecast and the measured HS30. Stores nothing. Returns
+// 0, or <0 if the model did not run (always on off-device builds).
+int inference_selftest(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

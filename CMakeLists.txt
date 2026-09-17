@@ -51,6 +51,7 @@ add_executable(savia_c
   src/system/log.c
   src/system/inference.c
   src/system/weather.c       # TA forecast cache (LoRa downlink -> LSTM input)
+  src/system/mock_soil.c     # dev mock probe: replays measured soil moisture
   # power: deep sleep + schedule
   src/power/power.c
   src/power/scheduler.c
