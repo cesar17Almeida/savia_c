@@ -353,8 +353,10 @@ static void handle_data_request(const uint8_t *buf, uint16_t len) {
 
     g_resp_seq = 0;
     g_resp_total = ble_chunk_total(g_resp_len, BLE_DATA_CHUNK_BYTES);
-    LOG_INFO("BLE: data_request %s/%s -> %u B in %u frame(s)\n",
-           dr.op, dr.kind, (unsigned) g_resp_len, (unsigned) g_resp_total);
+    // DEBUG: the app polls (logs every 3 s, AT/SDI-12 consoles every 700 ms), and at
+    // INFO these lines would push the LoRa/LSTM events out of the 48-line log ring.
+    LOG_DEBUG("BLE: data_request %s/%s -> %u B in %u frame(s)\n",
+              dr.op, dr.kind, (unsigned) g_resp_len, (unsigned) g_resp_total);
     if (g_con != HCI_CON_HANDLE_INVALID) att_server_request_can_send_now_event(g_con);
 }
 
@@ -623,47 +625,8 @@ static void weather_commit(const uint8_t *buf, uint16_t len) {
     }
 }
 
-static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_mode,
-                        uint16_t offset, uint8_t *buffer, uint16_t buffer_size) {
-    (void) con;
-    LOG_DEBUG("BLE: write handle=0x%04x len=%u\n", att_handle, buffer_size);
-    log_hexdump("  <- phone", buffer, buffer_size);
-
-    // Locked while provisioned & not authenticated: only the auth char accepts writes.
-    bool locked = g_cfg && auth_key_is_set(g_cfg->auth_key) && !g_authed;
-    if (locked && att_handle != H_AUTH) {
-        LOG_INFO("BLE: write locked (auth required)\n");
-        // Answer the config channel instead of dropping it silently -- otherwise the
-        // app can only infer the refusal from an unchanged snapshot.
-        if (att_handle == H_CONFIG) config_ack_send(false, "auth required");
-        return 0;
-    }
-
-    // GATT Long Write reassembly for H_WEATHER. BTstack delivers each prepared
-    // chunk with the real handle (ACTIVE), but the EXECUTE/CANCEL that close the
-    // transaction arrive with att_handle==0 -- so the transaction is tracked out
-    // of band here, not inside the per-handle switch below.
-    static uint8_t  weather_buf[512];
-    static uint16_t weather_len;
-    static bool     weather_prep;
-    if (tx_mode == ATT_TRANSACTION_MODE_ACTIVE && att_handle == H_WEATHER) {
-        if (offset == 0) { weather_len = 0; weather_prep = true; }
-        if ((size_t) offset + buffer_size <= sizeof weather_buf) {
-            memcpy(weather_buf + offset, buffer, buffer_size);
-            if (offset + buffer_size > weather_len) weather_len = offset + buffer_size;
-        }
-        return 0;
-    }
-    if (tx_mode == ATT_TRANSACTION_MODE_EXECUTE) {
-        if (weather_prep) weather_commit(weather_buf, weather_len);
-        weather_len = 0; weather_prep = false;
-        return 0;
-    }
-    if (tx_mode == ATT_TRANSACTION_MODE_CANCEL) {
-        weather_len = 0; weather_prep = false;
-        return 0;
-    }
-
+// Route one complete write value to its characteristic.
+static void dispatch_write(uint16_t att_handle, const uint8_t *buffer, uint16_t buffer_size) {
     if (att_handle == H_AUTH) {
         handle_auth_write(buffer, buffer_size);
     } else if (att_handle == H_TIME_SYNC) {
@@ -680,7 +643,7 @@ static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_m
                             (unsigned long long) ms);
         } else LOG_INFO("BLE: bad time_sync\n");
     } else if (att_handle == H_WEATHER) {
-        weather_commit(buffer, buffer_size);   // single write that fit one MTU
+        weather_commit(buffer, buffer_size);
     } else if (att_handle == H_DATA_REQUEST) {
         handle_data_request(buffer, buffer_size);
     } else if (att_handle == H_DATA_RESP_CCC) {
@@ -694,7 +657,67 @@ static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_m
     } else if (att_handle == H_BLOB_CTRL || att_handle == H_BLOB_CTRL_CCC) {
         // blob_control (firmware/model OTA): stub, present for discovery only.
     }
-    return 0;
+}
+
+// GATT Long Write reassembly. A value longer than MTU-3 (a config patch with several
+// sensors, the weather window) arrives as prepared writes: BTstack hands over each
+// chunk with its real handle (ACTIVE) and closes the transaction with handle 0
+// (VALIDATE, then EXECUTE or CANCEL), so the prepared handle is tracked here.
+static uint8_t  g_long_buf[1024];
+static uint16_t g_long_len;
+static uint16_t g_long_handle;          // 0 = no prepared write in progress
+static bool     g_long_overflow;
+
+static int att_write_cb(hci_con_handle_t con, uint16_t att_handle, uint16_t tx_mode,
+                        uint16_t offset, uint8_t *buffer, uint16_t buffer_size) {
+    (void) con;
+    LOG_DEBUG("BLE: write handle=0x%04x mode=%u len=%u\n", att_handle, tx_mode, buffer_size);
+    if (buffer) log_hexdump("  <- phone", buffer, buffer_size);
+
+    bool closing = tx_mode == ATT_TRANSACTION_MODE_VALIDATE ||
+                   tx_mode == ATT_TRANSACTION_MODE_EXECUTE;
+    if (tx_mode == ATT_TRANSACTION_MODE_CANCEL) {
+        g_long_handle = 0; g_long_len = 0; g_long_overflow = false;
+        return 0;
+    }
+    uint16_t target = closing ? g_long_handle : att_handle;
+
+    // Locked while provisioned & not authenticated: only the auth char accepts writes.
+    bool locked = g_cfg && auth_key_is_set(g_cfg->auth_key) && !g_authed;
+    if (locked && target != H_AUTH) {
+        LOG_INFO("BLE: write locked (auth required)\n");
+        // Answer the config channel instead of dropping it silently -- otherwise the
+        // app can only infer the refusal from an unchanged snapshot.
+        if (target == H_CONFIG) config_ack_send(false, "auth required");
+        return 0;
+    }
+
+    switch (tx_mode) {
+    case ATT_TRANSACTION_MODE_ACTIVE:
+        if (offset == 0 || att_handle != g_long_handle) {
+            g_long_handle = att_handle; g_long_len = 0; g_long_overflow = false;
+        }
+        if ((size_t) offset + buffer_size <= sizeof g_long_buf) {
+            memcpy(g_long_buf + offset, buffer, buffer_size);
+            if (offset + buffer_size > g_long_len) g_long_len = (uint16_t) (offset + buffer_size);
+        } else {
+            g_long_overflow = true;
+        }
+        return 0;
+    case ATT_TRANSACTION_MODE_VALIDATE:
+        // Too long to hold: refuse the whole write so the phone reports it.
+        return g_long_overflow ? ATT_ERROR_INVALID_ATTRIBUTE_VALUE_LENGTH : 0;
+    case ATT_TRANSACTION_MODE_EXECUTE: {
+        uint16_t h = g_long_handle, n = g_long_len;
+        bool overflow = g_long_overflow;
+        g_long_handle = 0; g_long_len = 0; g_long_overflow = false;
+        if (h && !overflow) dispatch_write(h, g_long_buf, n);
+        return 0;
+    }
+    default:
+        dispatch_write(att_handle, buffer, buffer_size);
+        return 0;
+    }
 }
 
 static void packet_handler(uint8_t type, uint16_t channel, uint8_t *packet, uint16_t size) {
