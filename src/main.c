@@ -358,6 +358,22 @@ int main(void) {
             was_timed = true;
         }
 
+        // A sync moved the clock back (a poisoned time repaired): readings stamped
+        // in that future move back with it, and LoRa resends the hours it sent.
+        if (timed) {
+            uint64_t back_ms = 0;
+            size_t fixed = 0;
+            cfg_lock();
+            bool stepped = clock_take_step_back(&back_ms);
+            if (stepped) fixed = storage_rewind_future(clock_now(savia_uptime_ms()), back_ms);
+            cfg_unlock();
+            if (stepped) {
+                lora_forget_future_soil(clock_now(savia_uptime_ms()));
+                LOG_WARN("clock: moved back %llu s; %u readings stamped ahead moved or dropped\n",
+                         (unsigned long long) (back_ms / 1000u), (unsigned) fixed);
+            }
+        }
+
         // Take a consistent snapshot of the BLE-owned cfg so the rest of the
         // iteration (incl. the long SDI-12 read of cfg.sensors[i]) sees a stable
         // copy even if a BLE config write lands mid-cycle.
@@ -488,8 +504,10 @@ int main(void) {
                             ble_lora_at_pending() || ble_sdi12_pending() ||
                             ble_act_pending() || ble_infer_pending() ||
                             ble_config_dirty_pending();
+            // A held LoRa time lives in RAM: a power-off would forget it.
+            bool clock_hold = clock_repair_pending();
             ble_radio_suspend();
-            if (wall_n && nap >= SAVIA_DEEP_SLEEP_MIN_S && !app_busy &&
+            if (wall_n && nap >= SAVIA_DEEP_SLEEP_MIN_S && !app_busy && !clock_hold &&
                 power_deep_sleep_available()) {
                 savia_deep_sleep_ctx_t ctx = {
                     .now_wall_ms = wall_n,

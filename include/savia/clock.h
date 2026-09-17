@@ -33,6 +33,23 @@ typedef enum {
 // An outage above this is worth a warning and marks a data gap (1 h skew is
 // agronomically tolerable per Antonio).
 #define CLOCK_OUTAGE_WARN_MS 3600000ULL
+// A queued LoRa downlink reaches the node one uplink late, two if one was lost:
+// a backward LoRa time within 2 periods + this margin (never under the floor)
+// is taken as stale. Further back, it is held until a second one agrees with it
+// to within the tolerance, and then it repairs the clock.
+#define CLOCK_LORA_STALE_MARGIN_MS  600000ULL    // 10 min
+#define CLOCK_LORA_STALE_MIN_MS     3600000ULL   // 1 h
+#define CLOCK_CONFIRM_TOLERANCE_MS  300000ULL    // 5 min
+// A backward step this small (a LoRa time lands ~6 s behind a BLE one) is not
+// worth moving stored readings for.
+#define CLOCK_STEP_BACK_MIN_MS      60000ULL
+
+typedef enum {
+    CLOCK_SYNC_REJECTED = 0,
+    CLOCK_SYNC_APPLIED,
+    CLOCK_SYNC_HELD,       // far behind the clock: waiting for a second LoRa time
+    CLOCK_SYNC_REPAIRED,   // agreed with the held one: the clock moved back
+} clock_sync_result_t;
 
 // One recorded sync. uptime_ms is only meaningful within a power cycle (0 after a
 // reboot-seed) -- across an outage it cannot be related to the new uptime.
@@ -73,6 +90,23 @@ bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t sour
 // the samples ahead of it, so one bogus future time cannot block every later sync.
 bool clock_apply_sync_trusted(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
                               uint64_t *outage_ms);
+
+// A LoRa downlink time. Authentic, but possibly late: see CLOCK_LORA_STALE_*.
+// `period_s` is the uplink cadence, which bounds how late it can be.
+clock_sync_result_t clock_apply_sync_lora(uint64_t epoch_ms, uint64_t uptime_ms,
+                                          uint32_t period_s, uint64_t *outage_ms);
+
+// How far behind the last known-good a LoRa time may be and still count as late.
+uint64_t clock_lora_stale_max_ms(uint32_t period_s);
+
+// True while a far-backward LoRa time waits for confirmation (RAM only: the
+// supervisor stays out of deep sleep meanwhile).
+bool clock_repair_pending(void);
+
+// True (clearing it) if a correction (trusted, or LoRa-repaired) moved time
+// backwards since the last call. `*delta_ms` is how far the running clock moved
+// (0 if it was not running: only history restored from flash is ahead).
+bool clock_take_step_back(uint64_t *delta_ms);
 
 // Continue the clock after a deep sleep from the always-on timer that kept
 // counting while the core was off. Sets the running clock and the ring head

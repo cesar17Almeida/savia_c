@@ -57,6 +57,8 @@ echo ""
 echo "== 2e) clock test (running clock + sync ring + validation + outage) =="
 "$CC" $CFLAGS test/test_clock.c src/system/clock.c -o /tmp/savia_test_clock
 /tmp/savia_test_clock
+"$CC" $CFLAGS test/test_clock_repair.c src/system/clock.c -o /tmp/savia_test_clock_repair
+/tmp/savia_test_clock_repair
 
 echo ""
 echo "== 2f) SDI-12 reply parser test =="

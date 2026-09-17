@@ -5,6 +5,9 @@
 #define MS_PER_MIN  60000LL
 #define MS_PER_HOUR 3600000ULL
 #define MS_PER_DAY  86400000ULL
+// A deadline further ahead than one interval plus this was set by a clock that
+// has since been moved back: the sensor is due now.
+#define BACKSTEP_TOLERANCE_MS 60000ULL
 
 void scheduler_init(savia_scheduler_t *s) {
     for (uint8_t i = 0; i < SAVIA_MAX_SENSORS; i++) s->next_sensor_ms[i] = 0;  // all due on first tick
@@ -74,9 +77,11 @@ savia_sched_action_t scheduler_tick(savia_scheduler_t *s, uint64_t now_ms,
         if (!savia_slot_used(&cfg->sensors[i]) ||
             sensor_type_is_output(cfg->sensors[i].type)) { s->next_sensor_ms[i] = 0; continue; }
         uint64_t interval = sensor_interval_ms(cfg->sensors, i, cfg->capture_interval_s);
-        if (s->next_sensor_ms[i] == 0 || now_ms >= s->next_sensor_ms[i]) {
+        if (s->next_sensor_ms[i] == 0 || now_ms >= s->next_sensor_ms[i] ||
+            s->next_sensor_ms[i] > now_ms + interval + BACKSTEP_TOLERANCE_MS) {
             act.capture_mask |= (uint8_t)(1u << i);
-            uint64_t base = (s->next_sensor_ms[i] == 0) ? now_ms : s->next_sensor_ms[i];
+            uint64_t base = (s->next_sensor_ms[i] == 0 || s->next_sensor_ms[i] > now_ms)
+                ? now_ms : s->next_sensor_ms[i];
             s->next_sensor_ms[i] = base + interval;
             while (s->next_sensor_ms[i] <= now_ms) s->next_sensor_ms[i] += interval;  // catch up
         }
@@ -121,6 +126,7 @@ uint32_t scheduler_next_sleep_s(const savia_scheduler_t *s, uint64_t now_ms,
         uint64_t interval = sensor_interval_ms(cfg->sensors, i, cfg->capture_interval_s);
         uint64_t until = (s->next_sensor_ms[i] > now_ms)
             ? (s->next_sensor_ms[i] - now_ms) : interval;
+        if (until > interval + BACKSTEP_TOLERANCE_MS) until = 0;   // stale deadline: due now
         if (until < next) next = until;
     }
 

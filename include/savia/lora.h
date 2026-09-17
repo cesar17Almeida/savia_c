@@ -59,6 +59,10 @@ bool lora_ping(uint8_t tx_gpio, uint8_t rx_gpio, uint64_t now_wall_ms);
 uint32_t lora_last_attempt_epoch_s(uint64_t now_wall_ms);
 // Newest soil hour already uplinked (0 = none), for the same stash.
 uint32_t lora_last_soil_hour_s(void);
+
+// The clock was moved back: forget uplinked hours that now lie in the future so
+// the rewound readings are sent again (bounded by the soil lookback).
+void lora_forget_future_soil(uint64_t now_ms);
 // After a wake from deep sleep: continue the cadence instead of starting a new
 // power cycle. No BOOT frame (the backend already answered it), coords already
 // sent, soil resume point kept, and the period gate counted from

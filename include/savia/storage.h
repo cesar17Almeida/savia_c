@@ -68,6 +68,11 @@ bool   storage_append_reading(const savia_reading_t *r);
 // have produced. Returns how many readings were rebased.
 size_t storage_rebase_provisional(uint64_t delta_ms);
 
+// The clock was moved back by `delta_ms`: readings stamped after `now_ms` came
+// from the clock that was ahead, so they move back by the same amount; any still
+// ahead after that is dropped. Returns how many were moved or dropped.
+size_t storage_rewind_future(uint64_t now_ms, uint64_t delta_ms);
+
 // Drop every reading of one logical port, keeping the rest in FIFO order. Called
 // when the installer deletes a sensor and chooses not to keep its data: the port
 // is about to be free for a different sensor, and readings are keyed by port.

@@ -154,6 +154,29 @@ int main(void) {
     assert(storage_rebase_provisional(delta) == 0);                    // idempotent: nothing left to fix
     printf("test_storage: provisional back-fill OK\n");
 
+    // --- clock moved back 1 year: rows stamped by the old clock follow it ---
+    storage_clear();
+    const uint64_t HOUR = 3600000ULL, YEAR = 8760 * HOUR;
+    uint64_t now = hour0 + 10 * HOUR;
+    pr.ts_ms = now - 2 * HOUR;        pr.value = 0.1f; storage_append_reading(&pr);  // before the poison
+    pr.ts_ms = now - HOUR + YEAR;     pr.value = 0.2f; storage_append_reading(&pr);  // under it
+    pr.ts_ms = now + 3 * YEAR;        pr.value = 0.3f; storage_append_reading(&pr);  // an older, bigger poison
+    pr.ts_ms = now - 30000 + YEAR;    pr.value = 0.4f; storage_append_reading(&pr);
+    (void) storage_take_dirty();
+    assert(storage_rewind_future(now, YEAR) == 3);
+    assert(storage_take_dirty());
+    assert(storage_query_raw(0, UINT64_MAX, 0, ro, 4) == 3);
+    assert(ro[0].ts_ms == now - 2 * HOUR && ro[0].value == 0.1f);
+    assert(ro[1].ts_ms == now - HOUR && ro[1].value == 0.2f);
+    assert(ro[2].ts_ms == now - 30000 && ro[2].value == 0.4f);
+    assert(storage_rewind_future(now, YEAR) == 0);     // nothing ahead any more
+    assert(!storage_take_dirty());
+    // No running clock before the fix (delta 0): rows ahead are dropped.
+    pr.ts_ms = now + HOUR; storage_append_reading(&pr);
+    assert(storage_rewind_future(now, 0) == 1);
+    assert(storage_reading_count() == 3);
+    printf("test_storage: rewind after a clock step back OK\n");
+
     // A full output keeps the NEWEST hours: 30 hourly buckets into room for 8.
     storage_init();
     for (int hh = 0; hh < 30; hh++) {

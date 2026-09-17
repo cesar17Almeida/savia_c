@@ -15,6 +15,15 @@ static bool           s_first_sync_done;  // first accepted sync THIS power cycl
 static uint64_t       s_boot_outage_ms;   // gap measured at that first sync
 static uint32_t       s_uncertainty_ms;   // drift allowance after a deep-sleep resume
 
+// A far-backward LoRa time held until a second one agrees (RAM only).
+static bool    s_cand_set;
+static bool    s_cand_wall;        // offset taken against the wall clock (else uptime)
+static int64_t s_cand_offset_ms;   // candidate epoch minus local time
+
+// Set when an accepted sync moved time backwards; taken by the supervisor.
+static bool     s_stepped_back;
+static uint64_t s_step_back_ms;
+
 void clock_set(uint64_t epoch_ms, uint64_t uptime_ms) {
     s_epoch_base_ms = epoch_ms - uptime_ms;
     s_last_sync_ms = epoch_ms;
@@ -51,20 +60,75 @@ uint8_t clock_get_ring(clock_sample_t *out, uint8_t max) {
     return n;
 }
 
-static bool apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
-                       uint64_t *outage_ms, bool trusted) {
+// Wall clock when running, uptime before the first sync.
+static uint64_t local_ms(uint64_t uptime_ms) {
+    return s_set ? clock_now(uptime_ms) : uptime_ms;
+}
+
+// True when this far-backward time agrees with the held one; otherwise it
+// becomes the held one.
+static bool candidate_confirms(uint64_t epoch_ms, uint64_t uptime_ms) {
+    int64_t off = (int64_t) epoch_ms - (int64_t) local_ms(uptime_ms);
+    if (s_cand_set && s_cand_wall == s_set) {
+        int64_t d = off - s_cand_offset_ms;
+        if (d < 0) d = -d;
+        if ((uint64_t) d <= CLOCK_CONFIRM_TOLERANCE_MS + s_uncertainty_ms) return true;
+    }
+    s_cand_set = true;
+    s_cand_wall = s_set;
+    s_cand_offset_ms = off;
+    return false;
+}
+
+uint64_t clock_lora_stale_max_ms(uint32_t period_s) {
+    uint64_t ms = 2ULL * period_s * 1000ULL + CLOCK_LORA_STALE_MARGIN_MS;
+    return ms < CLOCK_LORA_STALE_MIN_MS ? CLOCK_LORA_STALE_MIN_MS : ms;
+}
+
+// stale_max_ms != 0: the source is authentic but may arrive late (LoRa).
+static clock_sync_result_t apply_sync(uint64_t epoch_ms, uint64_t uptime_ms,
+                                      clock_source_t source, uint64_t *outage_ms,
+                                      bool trusted, uint64_t stale_max_ms) {
     if (outage_ms) *outage_ms = 0;
 
     // Absolute plausibility: a garbage downlink (0, 0xFFFFFFFF, ...) never lands.
-    if (epoch_ms < CLOCK_EPOCH_MIN_MS || epoch_ms >= CLOCK_EPOCH_MAX_MS) return false;
+    if (epoch_ms < CLOCK_EPOCH_MIN_MS || epoch_ms >= CLOCK_EPOCH_MAX_MS)
+        return CLOCK_SYNC_REJECTED;
 
     // Monotonic vs the last known-good, tolerating small cross-source jitter. Real
     // time only moves forward; a larger backward jump is a bad reading -> reject,
     // unless an authenticated owner says so: then the history ahead of it is bogus.
+    // A late LoRa downlink explains a jump of up to stale_max_ms; past that, two
+    // downlinks that agree with each other outvote the clock.
     uint64_t lk = clock_last_known();
     bool backward = lk != 0 && epoch_ms + CLOCK_BACKWARD_SLACK_MS + s_uncertainty_ms < lk;
-    if (backward && !trusted) return false;
+    clock_sync_result_t result = CLOCK_SYNC_APPLIED;
+    if (backward && !trusted) {
+        if (stale_max_ms == 0) return CLOCK_SYNC_REJECTED;
+        if (epoch_ms + stale_max_ms + s_uncertainty_ms >= lk) {
+            s_cand_set = false;   // the clock looks right: drop any held time
+            return CLOCK_SYNC_REJECTED;
+        }
+        if (!candidate_confirms(epoch_ms, uptime_ms)) return CLOCK_SYNC_HELD;
+        result = CLOCK_SYNC_REPAIRED;
+    }
     if (backward) s_count = 0;
+    s_cand_set = false;
+
+    // A correction that moves time back leaves whatever the old clock stamped in
+    // the future. Only a correction: a late downlink that is still ahead of the
+    // last known-good is taken as before, and its readings were right.
+    if (trusted || result == CLOCK_SYNC_REPAIRED) {
+        if (s_set) {
+            uint64_t before = clock_now(uptime_ms);
+            if (epoch_ms + CLOCK_STEP_BACK_MIN_MS < before) {
+                s_step_back_ms += before - epoch_ms;
+                s_stepped_back = true;
+            }
+        } else if (backward) {
+            s_stepped_back = true;   // no running clock: only the restored history is ahead
+        }
+    }
 
     // Gap vs the previous known-good. On the first sync after a reboot this equals
     // the power-off duration (lk is the pre-outage reference seeded from flash).
@@ -79,17 +143,33 @@ static bool apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t sou
     clock_set(epoch_ms, uptime_ms);
     s_dirty = true;
     s_uncertainty_ms = 0;   // a real authority replaces the deep-sleep estimate
-    return true;
+    return result;
 }
 
 bool clock_apply_sync(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
                       uint64_t *outage_ms) {
-    return apply_sync(epoch_ms, uptime_ms, source, outage_ms, false);
+    return apply_sync(epoch_ms, uptime_ms, source, outage_ms, false, 0) == CLOCK_SYNC_APPLIED;
 }
 
 bool clock_apply_sync_trusted(uint64_t epoch_ms, uint64_t uptime_ms, clock_source_t source,
                               uint64_t *outage_ms) {
-    return apply_sync(epoch_ms, uptime_ms, source, outage_ms, true);
+    return apply_sync(epoch_ms, uptime_ms, source, outage_ms, true, 0) != CLOCK_SYNC_REJECTED;
+}
+
+clock_sync_result_t clock_apply_sync_lora(uint64_t epoch_ms, uint64_t uptime_ms,
+                                          uint32_t period_s, uint64_t *outage_ms) {
+    return apply_sync(epoch_ms, uptime_ms, CLOCK_SRC_LORA, outage_ms, false,
+                      clock_lora_stale_max_ms(period_s));
+}
+
+bool clock_repair_pending(void) { return s_cand_set; }
+
+bool clock_take_step_back(uint64_t *delta_ms) {
+    if (!s_stepped_back) return false;
+    if (delta_ms) *delta_ms = s_step_back_ms;
+    s_stepped_back = false;
+    s_step_back_ms = 0;
+    return true;
 }
 
 bool clock_resume_from_aon(uint64_t epoch_ms, uint64_t uptime_ms, uint32_t uncertainty_ms) {

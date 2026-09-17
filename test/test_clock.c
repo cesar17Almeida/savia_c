@@ -139,6 +139,8 @@ int main(void) {
         assert(!clock_apply_sync(real, 9100, CLOCK_SRC_LORA, NULL));
         assert(clock_apply_sync_trusted(real, 9200, CLOCK_SRC_BLE, NULL));
         assert(clock_last_known() == real && clock_now(9200) == real);
+        uint64_t back = 0;
+        assert(clock_take_step_back(&back) && back == future + 200 - real);
         clock_sample_t ring[CLOCK_RING_MAX];
         assert(clock_get_ring(ring, CLOCK_RING_MAX) == 1);                // bogus samples dropped
         assert(clock_apply_sync(real + H, 9300, CLOCK_SRC_LORA, NULL));   // normal again

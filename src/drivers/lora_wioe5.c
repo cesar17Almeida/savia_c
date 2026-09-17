@@ -57,6 +57,7 @@ static bool     s_ready;            // UART up + module configured
 static bool     s_joined;
 static bool     s_attempted;        // a cycle has run (so the first one is immediate)
 static uint64_t s_last_attempt_ms;  // uptime ms of the last cycle attempt (modular math)
+static uint32_t s_period_s = SAVIA_LORA_PERIOD_MAX_S;   // cadence in use: bounds downlink lateness
 static uint8_t  s_tx, s_rx;         // GPIOs the module is currently wired to (0 = none)
 
 // Last downlink signal measured from an uplink ACK (the only signal the node sees).
@@ -479,11 +480,21 @@ static bool do_uplink(const station_config_t *cfg, uint64_t now_wall_ms) {
     uint64_t now_up = savia_uptime_ms();
     if (w.has_time) {
         uint64_t outage = 0;
-        if (clock_apply_sync(w.time_ms, now_up, CLOCK_SRC_LORA, &outage)) {
+        switch (clock_apply_sync_lora(w.time_ms, now_up, s_period_s, &outage)) {
+        case CLOCK_SYNC_APPLIED:
             if (outage >= CLOCK_OUTAGE_WARN_MS)
                 LOG_WARN("clock: board was powered off ~%llu min (LoRa sync)\n",
                          (unsigned long long) (outage / 60000ULL));
-        } else {
+            break;
+        case CLOCK_SYNC_HELD:
+            LOG_WARN("clock: LoRa time %llu is far behind the clock; held until a second downlink agrees\n",
+                     (unsigned long long) w.time_ms);
+            break;
+        case CLOCK_SYNC_REPAIRED:
+            LOG_WARN("clock: two LoRa downlinks agree -> clock moved back to %llu\n",
+                     (unsigned long long) w.time_ms);
+            break;
+        default:
             LOG_WARN("LoRa: implausible downlink clock (%llu), ignored\n",
                      (unsigned long long) w.time_ms);
         }
@@ -515,6 +526,7 @@ bool lora_cycle(const station_config_t *cfg) {
     uint32_t period_s = cfg->lora_period_s;
     if (period_s < SAVIA_LORA_PERIOD_MIN_S) period_s = SAVIA_LORA_PERIOD_MIN_S;
     if (period_s > SAVIA_LORA_PERIOD_MAX_S) period_s = SAVIA_LORA_PERIOD_MAX_S;
+    s_period_s = period_s;
 
     // One uplink per period; the first cycle after boot runs immediately.
     if (s_attempted && (up - s_last_attempt_ms) < (uint64_t) period_s * 1000u) return false;
@@ -550,6 +562,10 @@ uint32_t lora_last_attempt_epoch_s(uint64_t now_wall_ms) {
 }
 
 uint32_t lora_last_soil_hour_s(void) { return s_last_soil_hour_s; }
+
+void lora_forget_future_soil(uint64_t now_ms) {
+    if ((uint64_t) s_last_soil_hour_s * 1000u > now_ms) s_last_soil_hour_s = 0;
+}
 
 void lora_restore_cycle_state(uint32_t last_attempt_s, uint32_t last_soil_hour_s,
                               uint64_t now_wall_ms, const station_config_t *cfg) {

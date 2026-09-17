@@ -51,6 +51,24 @@ int main(void) {
     assert(a.capture_mask == 0);
     printf("test_scheduler: capture cadence OK\n");
 
+    // --- the clock moved back (a poisoned time repaired): due now, not in a year ---
+    scheduler_init(&s);
+    uint64_t ahead = 400 * DAY_MS;
+    a = scheduler_tick(&s, ahead, &cfg);             // deadline set by the clock that was ahead
+    assert(a.capture_mask == 0x1);
+    uint64_t real = 10 * DAY_MS + 3 * HOUR_MS;      // 03:00, clear of the 20:00 daily
+    assert(scheduler_next_sleep_s(&s, real, &cfg) == 1);
+    a = scheduler_tick(&s, real, &cfg);
+    assert(a.capture_mask == 0x1);
+    assert(s.next_sensor_ms[0] == real + HOUR_MS);   // cadence restarts from now
+    a = scheduler_tick(&s, real + 1000, &cfg);
+    assert(a.capture_mask == 0);
+    // A step back of seconds (LoRa lands ~6 s behind BLE) adds no capture.
+    a = scheduler_tick(&s, real - 6000, &cfg);
+    assert(a.capture_mask == 0);
+    assert(scheduler_next_sleep_s(&s, real - 6000, &cfg) == 3600);   // sleep cap, not "due now"
+    printf("test_scheduler: deadline left by a clock moved back OK\n");
+
     // --- daily fires once per day at daily_hour (UTC when offset = 0) ---
     scheduler_init(&s);
     uint64_t t20 = 20 * HOUR_MS;                     // 20:00 on epoch day 0

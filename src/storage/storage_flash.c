@@ -117,6 +117,25 @@ size_t storage_clear_port(uint8_t port) {
     return removed;
 }
 
+size_t storage_rewind_future(uint64_t now_ms, uint64_t delta_ms) {
+    if (s_rd_count == 0) return 0;
+    rd_normalise();                       // now the block is [0, s_rd_count)
+    size_t kept = 0, touched = 0;
+    for (size_t i = 0; i < s_rd_count; i++) {
+        savia_reading_t r = s_rd[i];
+        if (r.ts_ms > now_ms) {
+            touched++;
+            if (r.ts_ms - now_ms > delta_ms) continue;   // still ahead: drop
+            r.ts_ms -= delta_ms;
+        }
+        s_rd[kept++] = r;
+    }
+    s_rd_count = kept;
+    s_rd_head  = kept % READINGS_CAP;
+    if (touched) s_dirty = true;
+    return touched;
+}
+
 size_t storage_query_raw(uint64_t from_ms, uint64_t to_ms, size_t limit,
                          savia_reading_t *out, size_t out_cap) {
     size_t eff = out_cap;
