@@ -770,24 +770,21 @@ static void packet_handler(uint8_t type, uint16_t channel, uint8_t *packet, uint
     }
 }
 
-static bool g_stack_inited;   // l2cap/sm/att/handlers are set up once, not per resume
-
-// Bring the radio + GATT server + advertising up. Safe to call again after a
-// radio_suspend(): the one-time stack init is guarded so handlers aren't doubled.
+// Bring the radio + GATT server + advertising up, at boot and after radio_suspend().
 static void ble_bringup(void) {
     if (cyw43_arch_init()) {
         LOG_INFO("BLE: cyw43_arch_init FAILED\n");
         return;
     }
-    if (!g_stack_inited) {
-        l2cap_init();
-        sm_init();
-        att_server_init(profile_data, att_read_cb, att_write_cb);
-        hci_event_cb.callback = &packet_handler;
-        hci_add_event_handler(&hci_event_cb);
-        att_server_register_packet_handler(packet_handler);
-        g_stack_inited = true;
-    }
+    // cyw43_arch_init re-runs hci_init, which zeroes BTstack's handler lists, so
+    // every bring-up registers l2cap/sm/att again (skipping it on resume left an
+    // advertising radio whose connections never reached the GATT server).
+    l2cap_init();
+    sm_init();
+    att_server_init(profile_data, att_read_cb, att_write_cb);
+    hci_event_cb.callback = &packet_handler;
+    hci_add_event_handler(&hci_event_cb);
+    att_server_register_packet_handler(packet_handler);
 
     uint16_t adv_int_min = 0x0030, adv_int_max = 0x0030;
     bd_addr_t null_addr;

@@ -9,6 +9,9 @@ CHARACTERISTIC, GAP_DEVICE_NAME, READ | DYNAMIC, "Savia"
 
 PRIMARY_SERVICE, GATT_SERVICE
 CHARACTERISTIC, GATT_DATABASE_HASH, READ,
+// Service Changed: its presence tells phones not to cache this table across
+// connections, so a reflashed station is not written through stale handles.
+CHARACTERISTIC, GATT_SERVICE_CHANGED, DYNAMIC | INDICATE,
 
 // --- Savia service (5a71a000-...-0001) ---
 PRIMARY_SERVICE, 5A71A000-0000-0000-0000-000000000001
