@@ -5,12 +5,21 @@
 #include "savia/sensor_catalog.h"
 #include "savia/actuator.h"
 #include "savia/weather.h"
+#include <float.h>
 #include <stdint.h>
 #include <string.h>
 
 // Unsigned wire field that must fit `max`; a larger value would wrap into a valid one.
 static bool read_uint_max(cbor_reader_t *r, uint64_t max, uint64_t *v) {
     return cbor_r_uint(r, v) && *v <= max;
+}
+
+// Wire double -> float; false for NaN, infinities or values past the float range,
+// which would otherwise poison the weather cache, the model inputs or a sensor.
+static bool wire_float(double d, float *out) {
+    if (!(d >= -FLT_MAX && d <= FLT_MAX)) return false;
+    *out = (float) d;
+    return true;
 }
 
 // Double -> int32 without UB: NaN or out-of-range yields INT32_MIN, which callers reject.
@@ -200,7 +209,8 @@ static bool parse_ingest_point(cbor_reader_t *r, savia_reading_t *rd) {
             const char *s; size_t sn; if (!cbor_r_text(r, &s, &sn)) return false;
             kind = kind_from_str(s, sn);
         } else if (cbor_text_eq(fk, fkn, "value")) {
-            double d; if (!cbor_r_double(r, &d)) return false; rd->value = (float) d; has_value = true;
+            double d; if (!cbor_r_double(r, &d)) return false;
+            if (wire_float(d, &rd->value)) has_value = true; else bad = true;
         } else if (cbor_text_eq(fk, fkn, "depth_cm")) {
             if (!cbor_r_null(r)) {
                 uint64_t v; if (!cbor_r_uint(r, &v)) return false;
@@ -440,8 +450,8 @@ bool ble_parse_weather(const uint8_t *buf, size_t len, float *past_ta, uint8_t *
                         if (acount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
                         else if (a >= acount) break;
                         double dval;
-                        if (!cbor_r_double(&r, &dval)) return false;
-                        float val = (float)dval;
+                        float val;
+                        if (!cbor_r_double(&r, &dval) || !wire_float(dval, &val)) return false;
                         if (past_ta && n_past && *n_past < WEATHER_PAST_MAX) {
                             past_ta[*n_past] = val;
                             (*n_past)++;
@@ -454,8 +464,8 @@ bool ble_parse_weather(const uint8_t *buf, size_t len, float *past_ta, uint8_t *
                         if (acount == SAVIA_CBOR_INDEFINITE) { if (cbor_r_at_break(&r)) break; }
                         else if (a >= acount) break;
                         double dval;
-                        if (!cbor_r_double(&r, &dval)) return false;
-                        float val = (float)dval;
+                        float val;
+                        if (!cbor_r_double(&r, &dval) || !wire_float(dval, &val)) return false;
                         if (future_ta && n_future && *n_future < WEATHER_FUTURE_MAX) {
                             future_ta[*n_future] = val;
                             (*n_future)++;
@@ -671,9 +681,9 @@ static bool parse_sensor_slot(cbor_reader_t *r, savia_sensor_slot_t *slot, uint8
         } else if (cbor_text_eq(fk, fkn, "interval_s")) {
             if (!cbor_r_null(r)) { uint64_t v; if (!read_uint_max(r, UINT32_MAX, &v)) return false; slot->sample_interval_s = (uint32_t) v; }
         } else if (cbor_text_eq(fk, fkn, "scale")) {
-            double d; if (!cbor_r_double(r, &d)) return false; a_scale = (float) d;
+            double d; if (!cbor_r_double(r, &d) || !wire_float(d, &a_scale)) return false;
         } else if (cbor_text_eq(fk, fkn, "offset")) {
-            double d; if (!cbor_r_double(r, &d)) return false; a_offset = (float) d;
+            double d; if (!cbor_r_double(r, &d) || !wire_float(d, &a_offset)) return false;
         } else if (cbor_text_eq(fk, fkn, "chan")) {
             uint64_t ccount;
             if (!cbor_r_array(r, &ccount)) return false;

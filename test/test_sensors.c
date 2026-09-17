@@ -13,6 +13,7 @@
 #include "savia/config.h"
 #include "savia/pinmap.h"
 #include "savia/types.h"
+#include "savia/weather.h"
 
 // Build {v:1, op:"set", sensors:[...]} covering all four sensor molds.
 static size_t build_patch(uint8_t *buf, size_t cap) {
@@ -429,6 +430,56 @@ int main(void) {
         uint64_t first = 0; assert(cbor_r_uint(&ar, &first));
         assert(first == 1700000000000ull + (160 - rows) * 3600000ull);   // oldest ones dropped
         printf("test_sensors: agg reply keeps the newest rows that fit\n");
+    }
+
+    // Non-finite or float-overflowing doubles never reach the model, a sensor or the
+    // readings store.
+    {
+        uint8_t b[160];
+        cbor_writer_t w;
+        float pta[WEATHER_PAST_MAX], fta[WEATHER_FUTURE_MAX];
+        uint8_t np = 0, nf = 0;
+        double bad[] = { NAN, INFINITY, -INFINITY, 1e300 };
+        for (int i = 0; i < 4; i++) {
+            cbor_w_init(&w, b, sizeof b);
+            cbor_w_map(&w, 3);
+            cbor_w_textz(&w, "v"); cbor_w_uint(&w, 1);
+            cbor_w_textz(&w, "op"); cbor_w_textz(&w, "upd");
+            cbor_w_textz(&w, "data"); cbor_w_map(&w, 1);
+            cbor_w_textz(&w, "past_ta_hourly"); cbor_w_array(&w, 2);
+            cbor_w_double(&w, 21.5); cbor_w_double(&w, bad[i]);
+            assert(!w.overflow);
+            assert(!ble_parse_weather(b, w.len, pta, &np, fta, &nf));
+        }
+
+        cbor_w_init(&w, b, sizeof b);
+        cbor_w_map(&w, 1);
+        cbor_w_textz(&w, "sensors"); cbor_w_array(&w, 1);
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "gpio");  cbor_w_uint(&w, 26);
+        cbor_w_textz(&w, "type");  cbor_w_textz(&w, "analog_linear");
+        cbor_w_textz(&w, "scale"); cbor_w_double(&w, NAN);
+        ble_config_patch_t nanp;
+        assert(!ble_parse_config_patch(b, w.len, &nanp));
+
+        uint8_t ib[160];
+        cbor_w_init(&w, ib, sizeof ib);
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "v");  cbor_w_uint(&w, 1);
+        cbor_w_textz(&w, "op"); cbor_w_textz(&w, "ingest");
+        cbor_w_textz(&w, "data"); cbor_w_array(&w, 2);
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "ts_ms"); cbor_w_uint(&w, 1700000000000ull);
+        cbor_w_textz(&w, "kind");  cbor_w_textz(&w, "soil_moisture");
+        cbor_w_textz(&w, "value"); cbor_w_double(&w, INFINITY);
+        cbor_w_map(&w, 3);
+        cbor_w_textz(&w, "ts_ms"); cbor_w_uint(&w, 1700000060000ull);
+        cbor_w_textz(&w, "kind");  cbor_w_textz(&w, "soil_moisture");
+        cbor_w_textz(&w, "value"); cbor_w_double(&w, 0.33);
+        savia_reading_t pts[4]; bool iok = false;
+        assert(ble_parse_ingest(ib, w.len, pts, 4, &iok) == 1 && iok);
+        assert(pts[0].ts_ms == 1700000060000ull);
+        printf("test_sensors: non-finite floats rejected\n");
     }
 
     printf("test_sensors: OK\n");
