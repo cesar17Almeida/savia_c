@@ -50,8 +50,8 @@ UF2 := $(BUILD)/savia_c-$(BOARD)-ml$(INFER_TAG)device$(MOCK_TAG).uf2
 
 # What the flash warning says about mock data (one quoted shell word per line).
 ifeq ($(MOCK),ON)
-FLASH_MOCK_NOTE := "* build MOCK: la humedad es una réplica del dataset real" \
-  "  (48 h atrás + 24 h adelante); no lee la sonda y no se apaga desde la app" \
+FLASH_MOCK_NOTE := "* build MOCK: arranca con la humedad replicada del dataset real" \
+  "  (48 h atrás + 24 h adelante) en vez de la sonda; se apaga desde TerraLink" \
   "* no es para producción: con LoRa en FORWARD la réplica sube al backend"
 else
 FLASH_MOCK_NOTE := "* mock: conserva el valor guardado (de fábrica OFF; se cambia desde TerraLink)"

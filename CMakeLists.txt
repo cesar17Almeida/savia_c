@@ -37,8 +37,8 @@ option(SAVIA_ENABLE_BLE "Link the BLE stack (BTstack + CYW43)" ON)
 # watchdog must reset it. Never in a production build.
 option(SAVIA_WDT_SELFTEST "Hang once after boot to prove the watchdog resets the board" OFF)
 
-# Dev image: soil moisture is a replay of the LSTM dataset (48 h back + 24 h ahead)
-# instead of the probe; mock can't be switched off from the app. Never in production.
+# Dev image: boots with mock on, so soil moisture is a replay of the LSTM dataset
+# (48 h back + 24 h ahead) instead of the probe. Never in a production image.
 option(SAVIA_MOCK_DATA "Replay dataset soil moisture instead of reading the probe" OFF)
 
 pico_sdk_init()
