@@ -190,14 +190,6 @@ int main(void) {
         cfg.inference_mode = SAVIA_INFER_FORWARD;
         LOG_WARN("config: LOCAL inference unavailable in this build -> FORWARD\n");
     }
-#if SAVIA_MOCK_DATA
-    // A MOCK image always replays. Without a saved "mock on" the ring may hold a
-    // real image's readings: it is wiped once loaded (below).
-    bool drop_real = !cfg.mock_enabled || config_store_is_factory();
-    cfg.mock_enabled = true;
-#else
-    const bool drop_real = false;
-#endif
     savia_log_set_level(cfg.log_level);
 
     // Seed the sync ring from flash: the pre-outage reference. Does NOT set the
@@ -240,11 +232,6 @@ int main(void) {
     storage_init();
     // Bring back the readings the last power cycle had.
     storage_store_load();
-    if (drop_real) {
-        storage_clear();
-        if (storage_take_dirty()) storage_store_save();   // the wipe lands before the flag
-        if (!config_store_is_factory()) config_store_save(&cfg);
-    }
     // Mock mode replays the dataset instead of the probes (filled once the clock is known).
     bool mock_active = cfg.mock_enabled;
     if (mock_active) LOG_INFO("mock: soil comes from the dataset replay\n");

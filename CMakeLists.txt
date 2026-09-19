@@ -33,8 +33,8 @@ option(SAVIA_ON_DEVICE_INFERENCE "Run the LSTM on-device (needs RP2350 RAM/FPU)"
 # sin radio (bring-up / pruebas de lógica en placa).
 option(SAVIA_ENABLE_BLE "Link the BLE stack (BTstack + CYW43)" ON)
 
-# Dev image: soil moisture is a replay of the LSTM dataset (48 h back + 24 h ahead)
-# instead of the probe; mock can't be switched off from the app. Never in production.
+# Dev image: boots with mock on, so soil moisture is a replay of the LSTM dataset
+# (48 h back + 24 h ahead) instead of the probe. Never in a production image.
 option(SAVIA_MOCK_DATA "Replay dataset soil moisture instead of reading the probe" OFF)
 
 pico_sdk_init()
