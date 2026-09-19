@@ -1,0 +1,21 @@
+\section{Vista General}
+
+Concebimos la arquitectura global del sistema propuesto como una solución híbrida y jerárquica que rompe deliberadamente con el paradigma tradicional estrictamente centralizado en la nube o \textit{Cloud-Centric}, desplazando el núcleo de la lógica de cómputo e inferencia hacia la periferia de la red, concepto conocido como \textit{Edge Computing}. Hemos diseñado esta aproximación jerárquica específicamente para responder a las severas restricciones operativas del entorno agrícola español, caracterizado por una infraestructura de conectividad WAN intermitente, recursos energéticos limitados en campo y la necesidad de una soberanía de datos que mitigue los gastos operativos recurrentes.
+
+Para articular este flujo y garantizar una separación clara de responsabilidades computacionales, hemos estructurado rigurosamente la topología de red y procesamiento en tres capas físicas y lógicas interconectadas:
+
+\begin{enumerate}
+    \item \textbf{Capa de Instrumentación y Adquisición Física o Nodos IoT en Campo:} Esta capa constituye el nivel más periférico, denominado \textit{Deep Edge}, y está materializada por estaciones agro-climáticas conocidas como nodos Savia. Operamos estas estaciones mediante microcontroladores de arquitectura avanzada, empleando en este caso la plataforma Raspberry Pi Pico 2 W con el sistema en chip RP2350. Buscamos con el diseño de estos nodos la máxima eficiencia energética y resiliencia, gestionando la escasez de recursos mediante estados de suspensión profunda intermitentes y ciclos de trabajo optimizados.
+    
+    A nivel funcional, el \textit{firmware} embebido de la estación, denominado \textit{savia\_c} y desarrollado en C sobre el SDK nativo por nuestro compañero de proyecto César Almeida, opera de manera determinista asumiendo cuatro responsabilidades concurrentes:
+    \begin{itemize}
+        \item \textbf{Adquisición y Sensorización:} Establecemos interfaz directa con instrumentación agrícola, como sondas de humedad y temperatura del suelo, utilizando estándares de instrumentación multipunto como el protocolo SDI-12.
+        \item \textbf{Agregación y Persistencia Local:} Preprocesamos las series temporales brutas para la consolidación de medias horarias. Custodiamos estos datos temporalmente en estructuras de búfer circular sobre memoria no volátil, garantizando la preservación de la telemetría durante un mínimo de 48 horas ante caídas prolongadas de los enlaces de radio.
+        \item \textbf{Inferencia sobre el dispositivo o TinyML:} Aprovechamos las capacidades de cómputo del microcontrolador, incluyendo su unidad de punto flotante y la disponibilidad de 520 kilobytes de memoria RAM, para ejecutar localmente modelos de aprendizaje profundo. Específicamente, utilizamos redes neuronales recurrentes LSTM cuantizadas mediante \textit{TensorFlow Lite for Microcontrollers}. Esto dota a la estación de autonomía analítica para generar pronósticos a 24 horas sobre el estado hídrico sin depender del acceso a la nube.
+        \item \textbf{Interfaces de Comunicación:} Exponemos la telemetría histórica y los vectores de predicción hacia la capa intermedia a través de perfiles \textit{Bluetooth Low Energy} GATT. Adicionalmente, contamos con un canal de red de área amplia y baja potencia, basado en tecnología LoRa, para la emisión periódica de tramas de estado crítico.
+    \end{itemize}
+
+    \item \textbf{Capa de Borde Intermedia o Aplicación de Usuario:} 
+    
+    \item \textbf{Capa de Consolidación Global o Backend en la Nube:} 
+\end{enumerate}
